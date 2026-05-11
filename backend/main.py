@@ -92,7 +92,12 @@ async def send_email_updates():
         
         api_key = os.getenv("SENDGRID_API_KEY")
         sender_email = os.getenv("SENDGRID_SENDER_EMAIL")
-        
+        enable_alerts = os.getenv("ENABLE_EMAIL_ALERTS", "true").lower() == "true"
+
+        if not enable_alerts:
+            logger.info("Email alerts are currently DISABLED via config.")
+            continue
+            
         # Dynamically fetch latest policy makers from Firebase Firestore
         receiver_emails = fetch_policy_maker_emails()
 
