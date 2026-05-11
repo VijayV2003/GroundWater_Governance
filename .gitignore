@@ -1,0 +1,19 @@
+# Python
+backend/.venv/
+backend/__pycache__/
+backend/*.pyc
+backend/.env
+backend/cached_models/
+
+# Node
+frontend/node_modules/
+frontend/dist/
+frontend/build/
+frontend/.env
+frontend/.env.local
+
+# General
+.DS_Store
+.vscode/
+.idea/
+*.log
