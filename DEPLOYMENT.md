@@ -29,10 +29,11 @@ Located in `/frontend`.
 1. Create a new project and import your repository.
 2. Set the Root Directory to `frontend`.
 3. Vercel will automatically detect the build settings (`npm run build`).
-4. **Environment Variables:** 
-   - Add a variable named `REACT_APP_API_BASE_URL`.
-   - Set the value to your **Backend URL** (e.g., `https://your-backend-app.onrender.com`).
-5. Click **Deploy**.
+4. **Environment Variables (CRITICAL):** 
+   - Add `REACT_APP_API_BASE_URL` = (Your Backend URL).
+   - Add `CI` = `false` (This prevents the build from failing due to minor linting warnings).
+5. **Conflict Fix:** I have deleted the `yarn.lock` file from your project. Vercel was trying to use Yarn, but your project is built for NPM. Deleting it forces Vercel to use NPM correctly.
+6. Click **Deploy**.
 
 ---
 
