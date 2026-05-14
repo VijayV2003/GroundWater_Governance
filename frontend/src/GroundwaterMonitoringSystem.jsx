@@ -408,76 +408,177 @@ function StationMonitor({ selectedStation, setSelectedStation, setActiveTab }) {
                 url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
               />
               {(stations || []).map(s => {
-                const c = s.status === 'critical' ? '#ef4444' : s.status === 'warning' ? '#f59e0b' : '#10b981';
+                // Color by TREND — status shown via ring
+                const trendColor = s.trend === 'rising'   ? '#10b981'   // emerald green
+                                 : s.trend === 'declining' ? '#ef4444'   // red
+                                 :                           '#f59e0b';  // amber for stable
+
+                const statusRing = s.status === 'critical' ? '#7f1d1d'
+                                 : s.status === 'warning'  ? '#92400e'
+                                 :                           '#ffffff';
+
                 const isSelected = selectedStation?.id === s.id;
+
                 return (
-                  <CircleMarker 
-                    key={s.id} 
-                    center={[s.lat, s.lng]} 
-                    radius={isSelected ? 8 : 5}
-                    pathOptions={{ fillColor: c, fillOpacity: 0.9, color: '#fff', weight: 1.5 }}
-                    eventHandlers={{ click: () => setSelectedStation(s) }}
-                  >
-                    <LeafletTooltip direction="top" offset={[0, -10]} opacity={1}>
-                      <span className="font-semibold text-gray-800">{s.name}</span>
-                    </LeafletTooltip>
-                  </CircleMarker>
+                  <React.Fragment key={s.id}>
+                    {/* Outer glow ring for selected station */}
+                    {isSelected && (
+                      <CircleMarker
+                        center={[s.lat, s.lng]}
+                        radius={18}
+                        pathOptions={{
+                          fillColor: trendColor,
+                          fillOpacity: 0.2,
+                          color: trendColor,
+                          weight: 2,
+                          opacity: 0.6,
+                        }}
+                        interactive={false}
+                      />
+                    )}
+                    {/* Main marker */}
+                    <CircleMarker
+                      center={[s.lat, s.lng]}
+                      radius={isSelected ? 11 : 7}
+                      pathOptions={{
+                        fillColor: trendColor,
+                        fillOpacity: 0.95,
+                        color: statusRing,
+                        weight: isSelected ? 3 : 2,
+                      }}
+                      eventHandlers={{
+                        click: () => setSelectedStation(s),
+                      }}
+                    >
+                      <LeafletTooltip direction="top" offset={[0, -14]} opacity={1} permanent={false}>
+                        <div style={{ minWidth: 140, fontFamily: 'sans-serif', fontSize: 12 }}>
+                          <div style={{ fontWeight: 700, marginBottom: 2, color: '#1e293b' }}>{s.name}</div>
+                          <div style={{ color: '#64748b', marginBottom: 4 }}>{s.id} · {s.region}</div>
+                          <div style={{ display: 'flex', gap: 8 }}>
+                            <span style={{ color: '#3b82f6' }}>💧 {s.waterLevel}m</span>
+                            <span style={{ color: trendColor, fontWeight: 600 }}>
+                              {s.trend === 'rising' ? '↑ Rising' : s.trend === 'declining' ? '↓ Declining' : '→ Stable'}
+                            </span>
+                          </div>
+                        </div>
+                      </LeafletTooltip>
+                    </CircleMarker>
+                  </React.Fragment>
                 );
               })}
             </MapContainer>
-            <div className="absolute bottom-3 left-3 bg-white rounded-lg p-2 shadow text-xs flex gap-3">
-              {[['#10b981','Normal'],['#f59e0b','Warning'],['#ef4444','Critical']].map(([c, l]) => (
-                <div key={l} className="flex items-center gap-1">
-                  <div className="w-2.5 h-2.5 rounded-full" style={{ background: c }} />{l}
+
+            {/* Legend — trend-based */}
+            <div className="absolute bottom-3 left-3 bg-white/90 backdrop-blur-sm rounded-lg p-2.5 shadow text-xs z-[999] space-y-1">
+              <p className="font-semibold text-gray-600 text-xs mb-1.5">Trend</p>
+              {[['#10b981','↑ Rising'],['#f59e0b','→ Stable'],['#ef4444','↓ Declining']].map(([c, l]) => (
+                <div key={l} className="flex items-center gap-1.5">
+                  <div className="w-3 h-3 rounded-full border-2 border-white shadow-sm" style={{ background: c }} />
+                  <span className="text-gray-700">{l}</span>
                 </div>
               ))}
+              <div className="border-t pt-1 mt-1">
+                <p className="font-semibold text-gray-600 text-xs mb-1">Ring = Status</p>
+                {[['#ef4444', 'Critical'],['#f59e0b','Warning'],['#ffffff','Normal']].map(([c,l]) => (
+                  <div key={l} className="flex items-center gap-1.5">
+                    <div className="w-3 h-3 rounded-full border-2" style={{ background: '#9ca3af', borderColor: c }} />
+                    <span className="text-gray-700">{l}</span>
+                  </div>
+                ))}
+              </div>
             </div>
+
+            {/* Click hint when nothing selected */}
+            {!selectedStation && (
+              <div className="absolute top-3 right-3 bg-white/90 backdrop-blur-sm rounded-lg px-3 py-1.5 shadow text-xs text-gray-600 z-[999]">
+                🖱 Click a marker to select station
+              </div>
+            )}
           </div>
+
         </div>
 
         {/* Station detail */}
         <div className="bg-white rounded-lg shadow p-6">
           <h3 className="text-lg font-semibold mb-4">Station Details</h3>
-          {selectedStation ? (
-            <div className="space-y-3">
-              {[
-                ['Station ID', selectedStation.id],
-                ['Location',   selectedStation.name],
-                ['Water Level',`${selectedStation.waterLevel}m`],
-                ['Region',     selectedStation.region],
-                ['Last Reading',selectedStation.lastReading],
-              ].map(([k, v]) => (
-                <div key={k}>
-                  <p className="text-xs text-gray-500">{k}</p>
-                  <p className="font-medium text-sm">{v}</p>
+          {selectedStation ? (() => {
+            const trendColor = selectedStation.trend === 'rising'   ? '#10b981'
+                             : selectedStation.trend === 'declining' ? '#ef4444'
+                             :                                         '#f59e0b';
+            const trendLabel = selectedStation.trend === 'rising'   ? '↑ Rising'
+                             : selectedStation.trend === 'declining' ? '↓ Declining'
+                             :                                         '→ Stable';
+            return (
+              <div className="space-y-4">
+                {/* Status + trend header */}
+                <div className="flex items-center gap-2 p-3 rounded-lg border" style={{ borderColor: trendColor + '44', background: trendColor + '11' }}>
+                  <div className="w-3 h-3 rounded-full shrink-0" style={{ background: trendColor }} />
+                  <div>
+                    <p className="text-xs text-gray-500">Trend</p>
+                    <p className="font-bold text-sm" style={{ color: trendColor }}>{trendLabel}</p>
+                  </div>
+                  <div className="ml-auto">
+                    <StatusBadge status={selectedStation.status} />
+                  </div>
                 </div>
-              ))}
-              <div>
-                <p className="text-xs text-gray-500">Status</p>
-                <StatusBadge status={selectedStation.status} />
-              </div>
-              <div>
-                <p className="text-xs text-gray-500">Trend</p>
-                <div className="flex items-center gap-1.5">
-                  <TrendIndicator trend={selectedStation.trend} />
-                  <span className="text-sm capitalize">{selectedStation.trend}</span>
+
+                {/* Water level bar */}
+                <div>
+                  <div className="flex justify-between text-xs text-gray-500 mb-1">
+                    <span>Water Level</span>
+                    <span className="font-bold text-gray-800">{selectedStation.waterLevel} m bgl</span>
+                  </div>
+                  <div className="w-full bg-gray-100 rounded-full h-2">
+                    <div
+                      className="h-2 rounded-full transition-all duration-500"
+                      style={{ width: `${Math.min(100, (selectedStation.waterLevel / 80) * 100)}%`, background: trendColor }}
+                    />
+                  </div>
+                </div>
+
+                {/* Key info */}
+                <div className="grid grid-cols-2 gap-3">
+                  {[
+                    ['Station ID', selectedStation.id],
+                    ['Region', selectedStation.region],
+                    ['Location', selectedStation.name],
+                    ['Last Reading', selectedStation.lastReading],
+                  ].map(([k, v]) => (
+                    <div key={k} className="bg-gray-50 rounded-lg p-2.5">
+                      <p className="text-xs text-gray-400">{k}</p>
+                      <p className="font-semibold text-sm text-gray-800 mt-0.5 truncate">{v}</p>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Action buttons */}
+                <div className="space-y-2 pt-1">
+                  {userRole !== 'general' && (
+                    <button
+                      onClick={() => setActiveTab('insights')}
+                      className="w-full px-4 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium flex items-center justify-center gap-2 transition-colors"
+                    >
+                      <Brain className="w-4 h-4" /> View Model Insights
+                    </button>
+                  )}
+                  <button
+                    onClick={() => setSelectedStation(null)}
+                    className="w-full px-4 py-2 border border-gray-200 text-gray-600 rounded-lg hover:bg-gray-50 text-sm transition-colors"
+                  >
+                    Clear Selection
+                  </button>
                 </div>
               </div>
-              {userRole !== 'general' && (
-                <button
-                  onClick={() => setActiveTab('insights')}
-                  className="w-full px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm">
-                  View Full Report
-                </button>
-              )}
-            </div>
-          ) : (
+            );
+          })() : (
             <div className="text-center text-gray-400 py-10">
               <MapPin className="w-10 h-10 mx-auto mb-2 text-gray-300" />
-              <p>Select a station on the map to view details</p>
+              <p className="text-sm">Select a station on the map to view details</p>
+              <p className="text-xs mt-1 text-gray-300">or click a row in the table below</p>
             </div>
           )}
         </div>
+
       </div>
 
       {/* Station table */}
