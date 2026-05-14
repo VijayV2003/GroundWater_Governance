@@ -835,41 +835,175 @@ function PolicyTools({ summary, selectedStation }) {
           </div>
         );
       case 'Policy Impact Analysis':
+        const POLICY_DATA = {
+          'Subsidized Micro-Irrigation': {
+            color: 'blue',
+            icon: '💧',
+            depletion_reduction: 28,
+            recharge_increase: 12,
+            gsi_improvement: 18,
+            cost_crore: 840,
+            timeframe: '18–24 months',
+            risk: 'Low',
+            riskColor: 'green',
+            brief_outline: [
+              { section: '1. Executive Summary', points: ['Micro-irrigation subsidies reduce agricultural water demand by up to 28%.', 'Targeted at districts with >60% agricultural extraction share.', 'Expected GSI improvement of +18 points within 24 months.'] },
+              { section: '2. Policy Rationale', points: ['India loses ~40% of irrigation water to inefficient flood methods.', 'Drip/sprinkler systems achieve 90%+ water use efficiency.', 'Subsidy lowers adoption barrier for smallholder farmers (<2ha).'] },
+              { section: '3. Implementation Plan', points: ['Phase 1 (0–6 mo): Identify eligible farmers, vendor empanelment.', 'Phase 2 (6–14 mo): Subsidy disbursement + installation drives.', 'Phase 3 (14–24 mo): Monitoring and impact verification via DWLR.'] },
+              { section: '4. Budget & Financing', points: ['Total outlay: ₹840 Crore across 5 target districts.', 'Central share: 60%, State share: 40% under PMKSY.', 'ROI expected: ₹3.2 return per ₹1 invested over 5 years.'] },
+              { section: '5. Expected Outcomes', points: ['28% reduction in groundwater depletion rate.', '12% increase in effective monsoon recharge (less runoff).', 'Sustained aquifer recovery of 0.3–0.5 m over 3 years.'] },
+            ],
+          },
+          'Energy Tariff Hike': {
+            color: 'orange',
+            icon: '⚡',
+            depletion_reduction: 35,
+            recharge_increase: 5,
+            gsi_improvement: 22,
+            cost_crore: 0,
+            timeframe: '6–12 months',
+            risk: 'High',
+            riskColor: 'red',
+            brief_outline: [
+              { section: '1. Executive Summary', points: ['Electricity tariff hike for agricultural pumps directly reduces extraction volumes.', 'Price signal achieves 35% depletion reduction — the highest of all options.', 'High political risk requires parallel farmer support mechanisms.'] },
+              { section: '2. Policy Rationale', points: ['Flat-rate or free electricity eliminates conservation incentive.', 'Economic literature shows 10% tariff hike → 8–12% reduction in extraction.', 'Revenue can be reinvested into recharge infrastructure.'] },
+              { section: '3. Implementation Plan', points: ['Phase 1 (0–3 mo): Farmer consultation, safety-net scheme design.', 'Phase 2 (3–6 mo): Graduated tariff rollout with monthly metering.', 'Phase 3 (6–12 mo): Full implementation with hardship exemptions.'] },
+              { section: '4. Budget & Financing', points: ['Revenue-generating policy — no net outlay.', 'Estimated ₹1,200 Cr additional revenue annually.', '50% ring-fenced for Jal Shakti recharge programs.'] },
+              { section: '5. Expected Outcomes', points: ['35% reduction in groundwater extraction within 12 months.', '22-point GSI improvement — strongest policy lever available.', 'Requires mandatory social safety-net or political backlash risk is HIGH.'] },
+            ],
+          },
+          'Mandatory Rainwater Harvesting': {
+            color: 'teal',
+            icon: '🌧️',
+            depletion_reduction: 15,
+            recharge_increase: 32,
+            gsi_improvement: 25,
+            cost_crore: 320,
+            timeframe: '24–36 months',
+            risk: 'Medium',
+            riskColor: 'yellow',
+            brief_outline: [
+              { section: '1. Executive Summary', points: ['Mandatory RWH for all buildings >200 sqm boosts aquifer recharge by 32%.', 'Addresses the demand side (supply augmentation, not reduction).', 'Proven in Chennai and Bangalore — scalable nationally.'] },
+              { section: '2. Policy Rationale', points: ['Urban runoff accounts for 60–70% of precipitation in built-up areas.', 'RWH converts rooftop runoff into artificial recharge.', 'Decentralised approach reduces dependence on river/reservoir supply.'] },
+              { section: '3. Implementation Plan', points: ['Phase 1 (0–6 mo): Legislation and enforcement notification.', 'Phase 2 (6–18 mo): Subsidised installation for residential compliance.', 'Phase 3 (18–36 mo): Third-party audit and municipal integration.'] },
+              { section: '4. Budget & Financing', points: ['State outlay: ₹320 Crore (subsidies + enforcement infrastructure).', '70% cost borne by property owners under "Polluter Pays" principle.', 'Tax incentives (2% rebate) to accelerate voluntary adoption.'] },
+              { section: '5. Expected Outcomes', points: ['32% increase in annual recharge volumes.', 'GSI improvement of +25 points over 36 months.', 'Groundwater level recovery of 0.6–1.2 m in urban aquifers.'] },
+            ],
+          },
+          'Crop Diversification Mandate': {
+            color: 'green',
+            icon: '🌾',
+            depletion_reduction: 22,
+            recharge_increase: 18,
+            gsi_improvement: 20,
+            cost_crore: 560,
+            timeframe: '12–24 months',
+            risk: 'Medium',
+            riskColor: 'yellow',
+            brief_outline: [
+              { section: '1. Executive Summary', points: ['Shifting from water-intensive paddy/sugarcane to millets/pulses cuts demand 22%.', 'Dual benefit: water conservation + improved soil recharge capacity.', 'Requires significant MSP restructuring and farmer education.'] },
+              { section: '2. Policy Rationale', points: ['Paddy consumes 1,200–2,000 mm of water per season.', 'Millets consume 350–500 mm — 60–75% less.', 'India grows 50% of global paddy in water-scarce regions.'] },
+              { section: '3. Implementation Plan', points: ['Phase 1 (0–6 mo): MSP parity announcement for alternative crops.', 'Phase 2 (6–15 mo): Extension services + FPO formation.', 'Phase 3 (15–24 mo): Market linkage and procurement guarantee.'] },
+              { section: '4. Budget & Financing', points: ['₹560 Crore for MSP support, training, and market infrastructure.', 'Potential savings of ₹2,100 Cr/yr in irrigation subsidies.', 'Net positive fiscal impact within 3 years.'] },
+              { section: '5. Expected Outcomes', points: ['22% depletion reduction from agricultural sector.', '18% recharge increase from improved soil infiltration.', 'Long-term aquifer recovery and reduced irrigation dependency.'] },
+            ],
+          },
+        };
+
+        const pInfo = selectedPolicy ? POLICY_DATA[selectedPolicy] : null;
+        const colorMap = {
+          blue: { bg: 'bg-blue-50', border: 'border-blue-200', badge: 'bg-blue-100 text-blue-700', bar: 'bg-blue-500', head: 'bg-blue-600', text: 'text-blue-700' },
+          orange: { bg: 'bg-orange-50', border: 'border-orange-200', badge: 'bg-orange-100 text-orange-700', bar: 'bg-orange-500', head: 'bg-orange-600', text: 'text-orange-700' },
+          teal: { bg: 'bg-teal-50', border: 'border-teal-200', badge: 'bg-teal-100 text-teal-700', bar: 'bg-teal-500', head: 'bg-teal-600', text: 'text-teal-700' },
+          green: { bg: 'bg-green-50', border: 'border-green-200', badge: 'bg-green-100 text-green-700', bar: 'bg-green-500', head: 'bg-green-600', text: 'text-green-700' },
+        };
+        const c = pInfo ? (colorMap[pInfo.color] || colorMap.blue) : null;
+        const riskColors = { Low: 'bg-green-100 text-green-700', Medium: 'bg-yellow-100 text-yellow-700', High: 'bg-red-100 text-red-700' };
+
         return (
-          <div className="space-y-5">
-            <h4 className="text-lg font-bold text-gray-900">Policy Analysis</h4>
+          <div className="space-y-5 max-h-[80vh] overflow-y-auto pr-1">
+            <h4 className="text-lg font-bold text-gray-900 sticky top-0 bg-white pb-2">Policy Impact Analysis</h4>
             <div className="space-y-2">
               <label className="block text-sm font-medium text-gray-700">Select Proposed Policy</label>
-              <select className="w-full border-gray-300 border focus:border-purple-500 focus:ring-purple-500 rounded-lg p-2.5 text-sm" value={selectedPolicy} onChange={e => {
-                const val = e.target.value;
-                setSelectedPolicy(val);
-                if (val) {
-                  fetch(`http://localhost:8000/api/policy/impact`, {
-                    method: 'POST', headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ policy_name: val })
-                  }).then(r => r.json()).then(setPolicyImpactData).catch(console.error);
-                } else {
-                  setPolicyImpactData(null);
-                }
-              }}>
+              <select
+                className="w-full border border-gray-300 focus:border-purple-500 focus:ring-1 focus:ring-purple-500 rounded-lg p-2.5 text-sm"
+                value={selectedPolicy}
+                onChange={e => { setSelectedPolicy(e.target.value); setPolicyImpactData(null); }}
+              >
                 <option value="">-- Select a Policy --</option>
-                {['Subsidized Micro-Irrigation', 'Energy Tariff Hike', 'Mandatory Rainwater Harvesting'].map(p => <option key={p} value={p}>{p}</option>)}
+                {Object.keys(POLICY_DATA).map(p => <option key={p} value={p}>{p}</option>)}
               </select>
             </div>
-            {policyImpactData && (
-              <div className={`p-4 bg-purple-50 text-purple-800 rounded-lg border border-purple-200`}>
-                <p className="font-medium">
-                  {policyImpactData.depletion_reduction ? `Expected Depletion Rate Reduction: ${policyImpactData.depletion_reduction}%` : ''}
-                  {policyImpactData.recharge_increase ? `Expected Recharge Increase: ${policyImpactData.recharge_increase}%` : ''}
-                </p>
-                <p className="text-sm mt-2 opacity-90 font-semibold flex items-center gap-2">
-                  <BarChart3 className="w-4 h-4" />
-                  Projected GSI Improvement: +{policyImpactData.gsi_improvement}%
-                </p>
+
+            {pInfo && (
+              <div className="space-y-4 animate-in fade-in duration-300">
+                {/* Impact metrics */}
+                <div className={`rounded-xl border ${c.border} ${c.bg} p-4`}>
+                  <div className="flex items-center gap-2 mb-3">
+                    <span className="text-2xl">{pInfo.icon}</span>
+                    <span className={`font-semibold text-sm ${c.text}`}>{selectedPolicy}</span>
+                    <span className={`ml-auto text-xs font-medium px-2 py-0.5 rounded-full ${riskColors[pInfo.risk]}`}>
+                      {pInfo.risk} Risk
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-3 gap-3 mb-3">
+                    {[
+                      { label: 'Depletion ↓', value: `${pInfo.depletion_reduction}%`, bar: pInfo.depletion_reduction },
+                      { label: 'Recharge ↑', value: `+${pInfo.recharge_increase}%`, bar: pInfo.recharge_increase },
+                      { label: 'GSI +', value: `+${pInfo.gsi_improvement}`, bar: pInfo.gsi_improvement },
+                    ].map(({ label, value, bar }) => (
+                      <div key={label} className="bg-white rounded-lg p-3 text-center shadow-sm">
+                        <p className={`text-xl font-bold ${c.text}`}>{value}</p>
+                        <p className="text-xs text-gray-500 mt-0.5">{label}</p>
+                        <div className="w-full bg-gray-100 rounded-full h-1 mt-2">
+                          <div className={`h-1 rounded-full ${c.bar} transition-all duration-700`} style={{ width: `${Math.min(100, bar)}%` }} />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="flex gap-4 text-xs text-gray-600 pt-2 border-t border-gray-200 mt-1">
+                    <span>⏱ Timeframe: <strong>{pInfo.timeframe}</strong></span>
+                    {pInfo.cost_crore > 0
+                      ? <span>💰 Budget: <strong>₹{pInfo.cost_crore} Cr</strong></span>
+                      : <span>💰 Budget: <strong className="text-green-600">Revenue-neutral</strong></span>
+                    }
+                  </div>
+                </div>
+
+                {/* Policy Brief Outline */}
+                <div className="border border-gray-200 rounded-xl overflow-hidden">
+                  <div className={`${c.head} text-white px-4 py-3 flex items-center gap-2`}>
+                    <FileText className="w-4 h-4" />
+                    <span className="text-sm font-semibold">Policy Brief Outline</span>
+                  </div>
+                  <div className="divide-y divide-gray-100">
+                    {pInfo.brief_outline.map(({ section, points }) => (
+                      <div key={section} className="px-4 py-3">
+                        <p className={`text-xs font-bold uppercase tracking-wide ${c.text} mb-1.5`}>{section}</p>
+                        <ul className="space-y-1">
+                          {points.map((pt, i) => (
+                            <li key={i} className="text-xs text-gray-600 flex gap-2">
+                              <span className="text-gray-300 shrink-0">›</span>
+                              <span>{pt}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {!pInfo && (
+              <div className="flex flex-col items-center justify-center py-10 text-gray-400">
+                <Shield className="w-10 h-10 mb-3 text-gray-200" />
+                <p className="text-sm">Select a policy above to see projected impact and brief outline</p>
               </div>
             )}
           </div>
         );
+
       default:
         return null;
     }
@@ -911,7 +1045,7 @@ function PolicyTools({ summary, selectedStation }) {
 
         {activeModal && (
           <div className="fixed inset-0 bg-gray-900/50 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-in fade-in duration-200">
-            <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full p-6 relative animate-in zoom-in-95 duration-200">
+          <div className={`bg-white rounded-2xl shadow-2xl ${activeModal === 'Policy Impact Analysis' ? 'max-w-2xl' : 'max-w-lg'} w-full p-6 relative animate-in zoom-in-95 duration-200`}>
               <button onClick={() => setActiveModal(null)} className="absolute top-4 right-4 text-gray-400 hover:text-gray-700 hover:bg-gray-100 p-1 rounded-full transition-colors">
                 <X className="w-5 h-5" />
               </button>
