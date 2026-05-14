@@ -787,7 +787,25 @@ def generate_policy_report(station_id: str, req: ReportRequest = None):
     stress_data = stress_auto(station_id)
 
     genai.configure(api_key=api_key)
-    gemini_model = genai.GenerativeModel("gemini-1.5-flash")
+    
+    # Dynamically find an available model
+    try:
+        available_models = [m.name for m in genai.list_models() if "generateContent" in m.supported_generation_methods]
+        logger.info(f"Detected Gemini models: {available_models}")
+        
+        if not available_models:
+            raise Exception("No Gemini models found for this API key. Ensure the key is active in AI Studio.")
+            
+        # Prioritize 1.5-flash, then 1.0-pro, then whatever is first
+        target_model = "models/gemini-1.5-flash" if "models/gemini-1.5-flash" in available_models else \
+                       "models/gemini-pro" if "models/gemini-pro" in available_models else \
+                       available_models[0]
+        
+        logger.info(f"Selected model: {target_model}")
+        gemini_model = genai.GenerativeModel(target_model.replace("models/", ""))
+    except Exception as e:
+        logger.error(f"Failed to initialize Gemini: {e}")
+        raise HTTPException(500, f"Gemini Initialisation Error: {str(e)}. Available models detected: {locals().get('available_models', 'None')}")
 
     prompt = f"""
     You are an expert hydrogeologist and policy advisor writing for the Indian government.
