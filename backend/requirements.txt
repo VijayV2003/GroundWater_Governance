@@ -9,3 +9,6 @@ sendgrid
 python-dotenv
 gunicorn
 requests
+google-generativeai
+python-docx
+markdown

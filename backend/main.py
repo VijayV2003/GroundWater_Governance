@@ -32,6 +32,10 @@ import numpy as np
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from fastapi.responses import StreamingResponse
+import io
+import google.generativeai as genai
+from docx import Document
 
 # ── Internal modules ─────────────────────────────────────────────────────────
 from data.real_data_ingestion import (
@@ -496,6 +500,10 @@ def dashboard_summary() -> Dict:
     ratios = [b / l if l > 0 else 1.0 for b, l in zip(baselines, levels)]
     gsi    = int(np.clip(np.mean(ratios) * 80, 0, 100))
 
+    # Approximation for depletion rate and stress
+    depletion_rate = int(np.clip((1.0 - np.mean(ratios)) * 100, 0, 100)) if gsi < 100 else 0
+    aquifer_stress = int(np.clip(100 - gsi + 10, 0, 100))
+
     return {
         "total_stations":          len(_real_stations),
         "displayed_stations":      len(stations),
@@ -505,6 +513,10 @@ def dashboard_summary() -> Dict:
         "critical_count":          sum(1 for s in statuses if s == "critical"),
         "warning_count":           sum(1 for s in statuses if s == "warning"),
         "sustainability_index":    gsi,
+        "depletion_rate":          depletion_rate,
+        "aquifer_stress":          aquifer_stress,
+        "annual_loss_crore_inr":   126 + (aquifer_stress - 60) * 2,
+        "people_affected_million": round(2.3 + (depletion_rate - 20) * 0.1, 1),
         "data_source":             "Atal Jal DWLR 2015-2022",
         "realtime_extrapolated_to": datetime.utcnow().strftime("%Y-%m-%d"),
         "api_key_ready":           True,  # backend is ready; swap stub in real_data_ingestion.py
@@ -685,6 +697,7 @@ def gsi_auto(station_id: str) -> Dict:
     )
     result = compute_gsi(inp)
     result["station_id"] = station_id
+    result["trend_m_per_year"] = round(trend, 3)
     return result
 
 
@@ -753,74 +766,172 @@ def stress_auto(station_id: str) -> Dict:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# ── Composite endpoint – full station report ────────────────────────────────────
+# ── Policy Report Generation ───────────────────────────────────────────────────
 # ═══════════════════════════════════════════════════════════════════════════════
 
-@app.get("/api/station/{station_id}/full-report", tags=["Dashboard"])
-def full_station_report(station_id: str) -> Dict:
-    """
-    Run all 7 models for a real DWLR station and return a comprehensive report.
-    Used by the 'View Full Report' button in the frontend.
-    """
-    station = _get_real_station(station_id)
+class ReportRequest(BaseModel):
+    image_base64: Optional[str] = None
+
+@app.post("/api/policy/generate-report/{station_id}", tags=["Policy Tools"])
+def generate_policy_report(station_id: str, req: ReportRequest = None):
+    """Generate an AI-powered Word document policy brief, optionally embedding a model insights snapshot."""
+    stations = get_all_real_stations_with_status()
+    station = next((s for s in stations if s["id"] == station_id), None)
     if not station:
-        raise HTTPException(404, f"Station {station_id} not found in real dataset")
+        raise HTTPException(404, f"Station {station_id} not found")
 
-    hist     = _get_hist_df(station_id, 365)
-    current  = float(hist["water_level"].iloc[-1])
-    baseline = station["base_level"]
-    levels   = hist["water_level"].values
-    trend_yr = float(np.polyfit(np.arange(len(levels)), levels, 1)[0] * 365)
-    se_feats = _auto_socioeconomic(station)
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        raise HTTPException(500, "GEMINI_API_KEY is not configured on the server.")
 
-    fc       = GroundwaterForecaster(lags=7)
-    forecast = fc.fit(levels).predict(steps=30)
+    stress_data = stress_auto(station_id)
 
-    gsi_inp = GSIInput(
-        current_level_m=current,
-        baseline_level_m=baseline,
-        recharge_rate_mm_yr=300.0,
-        extraction_rate_mm_yr=420.0,
-        trend_slope_m_yr=trend_yr,
-        climatic_recharge_support=0.55,
-        aquifer_storage_coeff=0.12,
+    genai.configure(api_key=api_key)
+    gemini_model = genai.GenerativeModel("gemini-flash-latest")
+
+    prompt = f"""
+    You are an expert hydrogeologist and policy advisor writing for the Indian government.
+    Generate a comprehensive, professional 5-page Policy Brief for the District Collector
+    based on the following real-time groundwater data.
+
+    IMPORTANT: Do NOT generate any header, memorandum block, "OFFICE OF...", "TO:", "FROM:", "DATE:",
+    or "SUBJECT:" lines. Start DIRECTLY with the first section heading below.
+
+    Station Data:
+    - Station ID: {station['id']}
+    - Region: {station['region']}
+    - Current Water Level: {station['waterLevel']} m bgl
+    - Operational Status: {station['status']}
+    - Water Level Trend: {station.get('trend', 'N/A')}
+
+    ML Model 7 – Aquifer Stress Analysis Output:
+    - Predicted Stress Class: {stress_data.get('stress_class', stress_data.get('predicted_class', 'Unknown'))}
+    - Classification Confidence: {round(stress_data.get('confidence', 0) * 100, 1)}%
+    - Stage of Extraction: {stress_data.get('stage_of_extraction_pct', 80)}%
+    - Recommended Actions: {', '.join(stress_data.get('recommended_actions', []))}
+
+    Write the report with these five clearly labeled sections using Markdown headings:
+    ## 1. Executive Summary
+    ## 2. Groundwater Status Overview
+    ## 3. Aquifer Stress & Risk Analysis
+    ## 4. Socio-Economic Impact Assessment
+    ## 5. Specific Intervention Recommendations
+
+    Use professional government language. Be specific, actionable, and data-driven.
+    Include bullet points for recommendations and statistical references where possible.
+    """
+
+    try:
+        response = gemini_model.generate_content(prompt)
+        report_text = response.text
+    except Exception as e:
+        logger.error(f"Gemini API error: {e}")
+        raise HTTPException(500, f"Error generating report: {str(e)}")
+
+    # ── Strip any auto-generated memorandum/header block from Gemini output ──
+    # Gemini sometimes prepends an "OFFICE OF..." or "MEMORANDUM" block.
+    # We find the first real section heading (##) and discard everything before it.
+    import re as _re
+    # Find where the first section heading starts
+    first_section = _re.search(r'^## ', report_text, _re.MULTILINE)
+    if first_section:
+        report_text = report_text[first_section.start():]
+
+    # ── Build the Word Document ──────────────────────────────────────────────
+    from docx.shared import Inches, Pt, RGBColor
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from datetime import date as _date
+
+    doc = Document()
+
+    # ── PAGE 1: Model Insights Snapshot (if provided) ─────────────────────────
+    if req and req.image_base64:
+        try:
+            import base64 as _b64
+
+            # Full-page snapshot header
+            snap_title = doc.add_heading("", 0)
+            snap_title.clear()
+            r = snap_title.add_run("ML Model Insights Dashboard")
+            r.font.size = Pt(20)
+            r.font.color.rgb = RGBColor(0x1e, 0x40, 0xaf)
+
+            snap_sub = doc.add_paragraph()
+            snap_sub.add_run(
+                f"Station: {station['id']}  |  Region: {station['region']}  "
+                f"|  Generated: {_date.today().strftime('%d %B %Y')}"
+            ).bold = True
+            doc.add_paragraph()
+
+            img_bytes = _b64.b64decode(req.image_base64)
+            img_stream = io.BytesIO(img_bytes)
+            doc.add_picture(img_stream, width=Inches(6.2))
+            doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+            caption = doc.add_paragraph(
+                f"Real-time output of all 7 ML models for Station {station['id']} "
+                f"({station['region']}) – captured at report generation time."
+            )
+            caption.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            caption.runs[0].font.size = Pt(9)
+            caption.runs[0].font.italic = True
+            caption.runs[0].font.color.rgb = RGBColor(0x64, 0x74, 0x8b)
+
+            doc.add_page_break()
+        except Exception as img_err:
+            logger.warning(f"Could not embed snapshot image: {img_err}")
+
+    # ── PAGE 2+: Policy Brief Cover ───────────────────────────────────────────
+    title = doc.add_heading("", 0)
+    title.clear()
+    run = title.add_run("Water Security Policy Brief")
+    run.font.size = Pt(24)
+    run.font.color.rgb = RGBColor(0x1e, 0x40, 0xaf)
+
+    sub = doc.add_paragraph()
+    sub.add_run(
+        f"Station: {station['id']}  |  Region: {station['region']}  "
+        f"|  Status: {station['status'].upper()}"
+    ).bold = True
+
+    meta = doc.add_paragraph()
+    meta.add_run(
+        f"Generated on: {_date.today().strftime('%d %B %Y')}  "
+        f"|  Powered by Google Gemini + 7 ML Models"
     )
-    dhsf_feats = {
-        **se_feats,
-        "depletion_rate_m_per_year": abs(trend_yr),
-        "seasonal_amplitude_m":      float(levels.max() - levels.min()),
-        "recharge_deficit_mm":       120.0,
-    }
-    stress_feats = {
-        "fluctuation_amplitude_m": float(levels.max() - levels.min()),
-        "extraction_intensity":    0.75,
-        "soil_infiltration_rate":  12.0,
-        "pre_monsoon_depth_m":     float(levels[:int(len(levels)*0.25)].mean()),
-        "post_monsoon_depth_m":    float(levels[int(len(levels)*0.5):int(len(levels)*0.75)].mean()),
-        "long_term_trend_m_yr":    trend_yr,
-        "stage_of_extraction_pct": 80.0,
-        "number_of_wells_per_km2": 20.0,
-    }
+    meta.runs[-1].font.color.rgb = RGBColor(0x64, 0x74, 0x8b)
+    doc.add_paragraph()
 
-    return {
-        "station":               station,
-        "current_level_m":       round(current, 2),
-        "trend_m_per_year":      round(trend_yr, 3),
-        "forecast_30d":          forecast,
-        "data_range":            {
-            "from": str(hist["timestamp"].iloc[0].date()),
-            "to":   str(hist["timestamp"].iloc[-1].date()),
-            "points": len(hist),
-        },
-        "data_source":           "Atal Jal DWLR 2015-2022 + live extrapolation",
-        "realtime_note":         "Extrapolated from last known 2022 readings. Swap CGWB_API_KEY env var for live data.",
-        "gsi":                   compute_gsi(gsi_inp),
-        "dherp":                 compute_dherp(current, baseline, 150.0),
-        "dhsf":                  _dhsf.predict(dhsf_feats),
-        "stress":                _stress_clf.predict(stress_feats),
-        "anomalies":             _detector.detect(hist, station_id),
-        "recharge":              _recharge.predict_annual(
-                                     se_feats["annual_rainfall_mm"],
-                                     se_feats["evapotranspiration_mm"],
-                                 ),
+    # ── Parse and write AI content line-by-line ───────────────────────────────
+    for line in report_text.split('\n'):
+        line = line.strip()
+        if not line:
+            doc.add_paragraph()
+            continue
+        if line.startswith('## '):
+            doc.add_heading(line.replace('## ', '').strip(), level=2)
+        elif line.startswith('### '):
+            doc.add_heading(line.replace('### ', '').strip(), level=3)
+        elif line.startswith('# '):
+            doc.add_heading(line.replace('# ', '').strip(), level=1)
+        elif line.startswith('* ') or line.startswith('- '):
+            doc.add_paragraph(line[2:], style='List Bullet')
+        elif line.startswith('**') and line.endswith('**'):
+            p = doc.add_paragraph()
+            p.add_run(line.replace('**', '')).bold = True
+        else:
+            doc.add_paragraph(line)
+
+    f = io.BytesIO()
+    doc.save(f)
+    f.seek(0)
+
+    headers = {
+        'Content-Disposition': f'attachment; filename="Policy_Brief_{station_id}.docx"'
     }
+    return StreamingResponse(
+        f,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers=headers
+    )
+

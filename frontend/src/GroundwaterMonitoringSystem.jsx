@@ -700,6 +700,10 @@ function PolicyTools({ summary, selectedStation }) {
   const [simRainfall, setSimRainfall] = useState(0);
   const [simExtraction, setSimExtraction] = useState(0);
   const [selectedPolicy, setSelectedPolicy] = useState('');
+  
+  const [simProjectedGSI, setSimProjectedGSI] = useState(null);
+  const [policyImpactData, setPolicyImpactData] = useState(null);
+  const [isGeneratingReport, setIsGeneratingReport] = useState(false);
 
   const handleAction = (label) => {
     if (label === 'Research Data Export') {
@@ -713,17 +717,8 @@ function PolicyTools({ summary, selectedStation }) {
       document.body.removeChild(link);
     } else {
       setActiveModal(label);
-      if (label === 'Water Security Report Generator') {
-        setReportProgress(0);
-        const interval = setInterval(() => {
-          setReportProgress(p => {
-            if (p >= 100) {
-              clearInterval(interval);
-              return 100;
-            }
-            return p + 10;
-          });
-        }, 300);
+      if (label === 'Conservation Strategy Simulator') {
+        setSimProjectedGSI(summary?.sustainability_index ?? 72);
       }
     }
   };
@@ -733,39 +728,74 @@ function PolicyTools({ summary, selectedStation }) {
       case 'Water Security Report Generator':
         return (
           <div className="space-y-4">
-            <h4 className="text-lg font-bold text-gray-900">Generating AI Report...</h4>
-            <div className="w-full bg-gray-200 rounded-full h-4 overflow-hidden">
-              <div className="bg-blue-600 h-4 rounded-full transition-all duration-300" style={{ width: `${reportProgress}%` }}></div>
-            </div>
-            {reportProgress >= 100 && (
-              <div className="mt-4 p-4 bg-green-50 text-green-800 rounded-lg border border-green-200">
-                <p className="font-semibold mb-2 flex items-center gap-2">
-                  <CheckCircle className="w-5 h-5 text-green-600" /> Report Generation Complete
+            <h4 className="text-lg font-bold text-gray-900">Gemini-Powered Policy Brief</h4>
+            {!selectedStation ? (
+              <p className="text-sm text-red-600 bg-red-50 p-3 rounded-lg border border-red-200">
+                Please select a station in the Station Monitor first to generate a specific report.
+              </p>
+            ) : (
+              <>
+                <p className="text-sm text-gray-600">
+                  This will use Google Gemini to generate a 5-page Word policy brief for <strong>{selectedStation.name}</strong>, including a visual snapshot of all 7 ML model insights.
                 </p>
-                <p className="text-sm">National Security Status: Critical in 3 regions. Recommended action: Mandate drip irrigation.</p>
-                <button onClick={async () => {
-                  if (!selectedStation) {
-                    alert("Please select a station in the Station Monitor first to generate a report.");
-                    return;
-                  }
-                  const el = document.getElementById('pdf-report-content');
-                  if (el) {
-                    const canvas = await html2canvas(el, { scale: 2 });
-                    const imgData = canvas.toDataURL('image/png');
-                    const pdf = new jsPDF('p', 'mm', 'a4');
-                    const pdfWidth = pdf.internal.pageSize.getWidth();
-                    const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
-                    pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
-                    pdf.save(`Station_${selectedStation.id}_Report.pdf`);
-                    setActiveModal(null);
-                  }
-                }} className="mt-4 px-4 py-2 bg-blue-600 text-white font-medium rounded-lg shadow hover:bg-blue-700 transition-colors">Download PDF</button>
-              </div>
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-xs text-blue-800 flex items-start gap-2">
+                  <Info className="w-4 h-4 mt-0.5 shrink-0" />
+                  <span>The report will capture the current <strong>Model Insights</strong> panel as a visual appendix embedded in the Word document.</span>
+                </div>
+                {isGeneratingReport ? (
+                  <div className="flex flex-col items-center justify-center p-8 bg-gray-50 rounded-xl border border-gray-100">
+                    <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-blue-600 mb-4"></div>
+                    <p className="text-sm font-medium text-gray-700">Generating comprehensive report...</p>
+                    <p className="text-xs text-gray-500 mt-1">Capturing model insights & calling Gemini API…</p>
+                  </div>
+                ) : (
+                  <button onClick={async () => {
+                    setIsGeneratingReport(true);
+                    try {
+                      // 1. Capture the Model Insights panel as a PNG snapshot
+                      let imageBase64 = null;
+                      const captureEl = document.getElementById('model-insights-capture');
+                      if (captureEl) {
+                        const html2canvas = (await import('html2canvas')).default;
+                        const canvas = await html2canvas(captureEl, {
+                          scale: 1.5,
+                          useCORS: true,
+                          backgroundColor: '#ffffff',
+                          logging: false,
+                        });
+                        imageBase64 = canvas.toDataURL('image/png').split(',')[1];
+                      }
+                      // 2. POST snapshot + station to backend
+                      const res = await fetch(`http://localhost:8000/api/policy/generate-report/${selectedStation.id}`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ image_base64: imageBase64 }),
+                      });
+                      if (!res.ok) throw new Error("Failed to generate report");
+                      const blob = await res.blob();
+                      const url = window.URL.createObjectURL(blob);
+                      const a = document.createElement('a');
+                      a.href = url;
+                      a.download = `Policy_Brief_${selectedStation.id}.docx`;
+                      document.body.appendChild(a);
+                      a.click();
+                      window.URL.revokeObjectURL(url);
+                      document.body.removeChild(a);
+                      setActiveModal(null);
+                    } catch (err) {
+                      alert("Error generating report. Ensure backend is running and GEMINI_API_KEY is configured.");
+                    } finally {
+                      setIsGeneratingReport(false);
+                    }
+                  }} className="w-full px-4 py-3 bg-blue-600 text-white font-medium rounded-lg shadow hover:bg-blue-700 transition-colors flex items-center justify-center gap-2">
+                    <FileText className="w-5 h-5" /> Generate Word Document
+                  </button>
+                )}
+              </>
             )}
           </div>
         );
       case 'Conservation Strategy Simulator':
-        const projectedGSI = Math.min(100, Math.max(0, 72 + simRainfall * 0.5 + simExtraction * 0.8));
         return (
           <div className="space-y-6">
             <h4 className="text-lg font-bold text-gray-900">Conservation Simulator</h4>
@@ -784,36 +814,63 @@ function PolicyTools({ summary, selectedStation }) {
                 </label>
                 <input type="range" min="0" max="100" value={simExtraction} onChange={(e) => setSimExtraction(Number(e.target.value))} className="w-full accent-green-600" />
               </div>
+              <button onClick={async () => {
+                try {
+                  const res = await fetch(`http://localhost:8000/api/policy/simulate`, {
+                    method: 'POST', headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ rainfall_change_pct: simRainfall, extraction_reduction_pct: simExtraction })
+                  });
+                  const data = await res.json();
+                  setSimProjectedGSI(data.projected_gsi);
+                } catch (e) {
+                  console.error(e);
+                }
+              }} className="w-full py-2 bg-gray-100 hover:bg-gray-200 text-gray-800 rounded-lg text-sm font-medium transition-colors">
+                Calculate Impact
+              </button>
             </div>
-            <div className="p-6 bg-gray-50 rounded-xl border text-center">
-              <p className="text-sm font-medium text-gray-500 mb-1">Projected Sustainability Index</p>
-              <p className={`text-4xl font-bold ${projectedGSI > 70 ? 'text-green-600' : projectedGSI > 40 ? 'text-yellow-600' : 'text-red-600'}`}>
-                {Math.round(projectedGSI)}%
-              </p>
-            </div>
+            {simProjectedGSI !== null && (
+              <div className="p-6 bg-gray-50 rounded-xl border text-center">
+                <p className="text-sm font-medium text-gray-500 mb-1">Projected Sustainability Index (National)</p>
+                <p className={`text-4xl font-bold ${simProjectedGSI > 70 ? 'text-green-600' : simProjectedGSI > 40 ? 'text-yellow-600' : 'text-red-600'}`}>
+                  {simProjectedGSI}%
+                </p>
+              </div>
+            )}
           </div>
         );
       case 'Policy Impact Analysis':
-        const policyImpact = {
-          'Subsidized Micro-Irrigation': { text: 'Expected Depletion Rate Reduction: 15%', color: 'text-purple-800', bg: 'bg-purple-50', border: 'border-purple-200' },
-          'Energy Tariff Hike': { text: 'Expected Depletion Rate Reduction: 8%', color: 'text-orange-800', bg: 'bg-orange-50', border: 'border-orange-200' },
-          'Mandatory Rainwater Harvesting': { text: 'Expected Recharge Increase: 12%', color: 'text-blue-800', bg: 'bg-blue-50', border: 'border-blue-200' },
-        };
-        const activePolicy = policyImpact[selectedPolicy];
         return (
           <div className="space-y-5">
             <h4 className="text-lg font-bold text-gray-900">Policy Analysis</h4>
             <div className="space-y-2">
               <label className="block text-sm font-medium text-gray-700">Select Proposed Policy</label>
-              <select className="w-full border-gray-300 border focus:border-purple-500 focus:ring-purple-500 rounded-lg p-2.5 text-sm" value={selectedPolicy} onChange={e => setSelectedPolicy(e.target.value)}>
+              <select className="w-full border-gray-300 border focus:border-purple-500 focus:ring-purple-500 rounded-lg p-2.5 text-sm" value={selectedPolicy} onChange={e => {
+                const val = e.target.value;
+                setSelectedPolicy(val);
+                if (val) {
+                  fetch(`http://localhost:8000/api/policy/impact`, {
+                    method: 'POST', headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ policy_name: val })
+                  }).then(r => r.json()).then(setPolicyImpactData).catch(console.error);
+                } else {
+                  setPolicyImpactData(null);
+                }
+              }}>
                 <option value="">-- Select a Policy --</option>
-                {Object.keys(policyImpact).map(p => <option key={p} value={p}>{p}</option>)}
+                {['Subsidized Micro-Irrigation', 'Energy Tariff Hike', 'Mandatory Rainwater Harvesting'].map(p => <option key={p} value={p}>{p}</option>)}
               </select>
             </div>
-            {selectedPolicy && activePolicy && (
-              <div className={`p-4 ${activePolicy.bg} ${activePolicy.color} rounded-lg border ${activePolicy.border}`}>
-                <p className="font-medium">{activePolicy.text}</p>
-                <p className="text-xs mt-2 opacity-80">Impact estimated using Model 2 (DHSF) and Model 6 (DH-ERP) projections over a 5-year horizon.</p>
+            {policyImpactData && (
+              <div className={`p-4 bg-purple-50 text-purple-800 rounded-lg border border-purple-200`}>
+                <p className="font-medium">
+                  {policyImpactData.depletion_reduction ? `Expected Depletion Rate Reduction: ${policyImpactData.depletion_reduction}%` : ''}
+                  {policyImpactData.recharge_increase ? `Expected Recharge Increase: ${policyImpactData.recharge_increase}%` : ''}
+                </p>
+                <p className="text-sm mt-2 opacity-90 font-semibold flex items-center gap-2">
+                  <BarChart3 className="w-4 h-4" />
+                  Projected GSI Improvement: +{policyImpactData.gsi_improvement}%
+                </p>
               </div>
             )}
           </div>
@@ -872,8 +929,8 @@ function PolicyTools({ summary, selectedStation }) {
           <h4 className="font-medium mb-4 text-gray-900">Key Policy Metrics</h4>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-center">
             {[
-              ['23%', 'Depletion Rate'],
-              ['67%', 'Aquifer Stress'],
+              [`${summary?.depletion_rate ?? 23}%`, 'Depletion Rate'],
+              [`${summary?.aquifer_stress ?? 67}%`, 'Aquifer Stress'],
               [`₹${summary?.annual_loss_crore_inr ?? 126}Cr`, 'Annual Loss'],
               [`${summary?.people_affected_million ?? 2.3}M`, 'People Affected'],
             ].map(([v, l]) => (

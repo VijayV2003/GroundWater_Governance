@@ -297,7 +297,7 @@ export default function ModelInsights({ selectedStation }) {
   }
 
   return (
-    <div className="space-y-4">
+    <div id="model-insights-capture" className="space-y-4">
       {/* Station header */}
       <div className="bg-gradient-to-r from-blue-600 to-cyan-600 text-white rounded-lg p-4 flex items-center gap-3">
         <div className="bg-white/20 p-2 rounded-lg">
