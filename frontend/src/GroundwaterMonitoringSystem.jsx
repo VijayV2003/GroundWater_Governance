@@ -697,8 +697,11 @@ function AlertsSection() {
 function PolicyTools({ summary, selectedStation }) {
   const [activeModal, setActiveModal] = useState(null);
   const [reportProgress, setReportProgress] = useState(0);
-  const [simRainfall, setSimRainfall] = useState(0);
-  const [simExtraction, setSimExtraction] = useState(0);
+  const [simRainfall,    setSimRainfall]    = useState(0);
+  const [simExtraction,  setSimExtraction]  = useState(0);
+  const [simRWH,         setSimRWH]         = useState(0);
+  const [simCrop,        setSimCrop]        = useState(0);
+  const [simIndustrial,  setSimIndustrial]  = useState(0);
   const [selectedPolicy, setSelectedPolicy] = useState('');
   
   const [simProjectedGSI, setSimProjectedGSI] = useState(null);
@@ -790,50 +793,147 @@ function PolicyTools({ summary, selectedStation }) {
             )}
           </div>
         );
-      case 'Conservation Strategy Simulator':
+      case 'Conservation Strategy Simulator': {
+        // ── Real-time hydrology computation (no backend needed) ──────────────
+        const baseGSI       = summary?.sustainability_index ?? 72;
+        const baseLevel     = selectedStation?.waterLevel ?? 45;
+        const baseTrend     = selectedStation?.status === 'critical' ? -1.8 : selectedStation?.status === 'warning' ? -0.9 : -0.3;
+
+        // Core water-balance model: driven by 5 levers
+        const rechargeGain  = (simRainfall / 100) * 280;              // mm/yr from rainfall delta
+        const extractDelta  = -(simExtraction / 100) * 420;           // mm/yr extraction reduction
+        const rwh           = (simRWH / 100) * 140;                   // artificial recharge from RWH
+        const cropSaving    = (simCrop / 100) * 180;                  // demand drop from crop shift
+        const industrialCut = (simIndustrial / 100) * 90;             // industrial reduction
+
+        const netBalance    = rechargeGain + extractDelta + rwh + cropSaving + industrialCut;   // mm/yr
+        const recoveryRate  = netBalance / 1000;                       // m/yr aquifer level change
+        const newTrend      = baseTrend + recoveryRate;
+        const depletionRate = Math.max(0, Math.min(100, 67 - (netBalance / 10)));
+        const rechargeRate  = Math.max(0, Math.min(100, 38 + (netBalance / 12)));
+        const extractIndex  = Math.max(0, 100 - simExtraction - simCrop * 0.5 - simIndustrial * 0.3);
+        const projGSI       = Math.max(5, Math.min(99, baseGSI + (netBalance / 15)));
+        const yearsToRecover = recoveryRate > 0 ? Math.ceil((baseLevel - 20) / recoveryRate) : null;
+
+        const riskLevel = projGSI > 75 ? 'Safe' : projGSI > 55 ? 'Moderate' : projGSI > 35 ? 'Critical' : 'Over-Exploited';
+        const riskColor = projGSI > 75 ? 'text-green-600' : projGSI > 55 ? 'text-yellow-600' : projGSI > 35 ? 'text-red-600' : 'text-red-900';
+        const riskBg    = projGSI > 75 ? 'from-green-50 to-emerald-50 border-green-200' : projGSI > 55 ? 'from-yellow-50 to-amber-50 border-yellow-200' : 'from-red-50 to-rose-50 border-red-200';
+
+        // 10-year projection data
+        const projectionData = Array.from({ length: 11 }, (_, yr) => {
+          const level = +(baseLevel + newTrend * yr).toFixed(2);
+          const baseline = +(baseLevel + baseTrend * yr).toFixed(2);
+          return { year: `Y${yr}`, level: Math.max(5, level), baseline: Math.max(5, baseline) };
+        });
+
+        const PRESETS = [
+          { label: 'Baseline',     rain: 0,   ext: 0,  rwh: 0,  crop: 0,  ind: 0,  color: 'bg-gray-100 text-gray-700' },
+          { label: 'Drought',      rain: -40, ext: 0,  rwh: 0,  crop: 0,  ind: 0,  color: 'bg-red-100 text-red-700' },
+          { label: 'Conservation', rain: 10,  ext: 40, rwh: 60, crop: 30, ind: 20, color: 'bg-blue-100 text-blue-700' },
+          { label: 'Aggressive',   rain: 20,  ext: 80, rwh: 90, crop: 70, ind: 50, color: 'bg-green-100 text-green-700' },
+        ];
+
+        const sliders = [
+          { key: 'rain',      label: 'Rainfall Change',          min: -50, max: 50,  val: simRainfall,   set: setSimRainfall,   unit: '%', color: 'accent-blue-500',   desc: 'Monsoon deviation from historical average' },
+          { key: 'ext',       label: 'Extraction Reduction',     min: 0,   max: 100, val: simExtraction, set: setSimExtraction, unit: '%', color: 'accent-green-500',  desc: 'Agricultural groundwater pump reduction' },
+          { key: 'rwh',       label: 'Rainwater Harvesting',     min: 0,   max: 100, val: simRWH,        set: setSimRWH,        unit: '%', color: 'accent-cyan-500',   desc: 'Rooftop RWH adoption rate' },
+          { key: 'crop',      label: 'Crop Diversification',     min: 0,   max: 100, val: simCrop,       set: setSimCrop,       unit: '%', color: 'accent-amber-500',  desc: 'Shift to low water-intensity crops' },
+          { key: 'ind',       label: 'Industrial Efficiency',    min: 0,   max: 100, val: simIndustrial, set: setSimIndustrial, unit: '%', color: 'accent-purple-500', desc: 'Industrial process water recycling' },
+        ];
+
         return (
-          <div className="space-y-6">
-            <h4 className="text-lg font-bold text-gray-900">Conservation Simulator</h4>
-            <div className="space-y-4">
+          <div className="space-y-4 max-h-[85vh] overflow-y-auto pr-1">
+            {/* Header */}
+            <div className="flex items-center justify-between sticky top-0 bg-white pb-2 z-10">
               <div>
-                <label className="flex justify-between text-sm font-medium text-gray-700 mb-1">
-                  <span>Rainfall Scenario</span>
-                  <span className="text-blue-600">{simRainfall > 0 ? '+' : ''}{simRainfall}%</span>
-                </label>
-                <input type="range" min="-50" max="50" value={simRainfall} onChange={(e) => setSimRainfall(Number(e.target.value))} className="w-full accent-blue-600" />
+                <h4 className="text-lg font-bold text-gray-900">Conservation Simulator</h4>
+                <p className="text-xs text-gray-500">Adjust levers — results update live</p>
               </div>
-              <div>
-                <label className="flex justify-between text-sm font-medium text-gray-700 mb-1">
-                  <span>Extraction Reduction</span>
-                  <span className="text-green-600">{simExtraction}%</span>
-                </label>
-                <input type="range" min="0" max="100" value={simExtraction} onChange={(e) => setSimExtraction(Number(e.target.value))} className="w-full accent-green-600" />
-              </div>
-              <button onClick={async () => {
-                try {
-                  const res = await fetch(`http://localhost:8000/api/policy/simulate`, {
-                    method: 'POST', headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ rainfall_change_pct: simRainfall, extraction_reduction_pct: simExtraction })
-                  });
-                  const data = await res.json();
-                  setSimProjectedGSI(data.projected_gsi);
-                } catch (e) {
-                  console.error(e);
-                }
-              }} className="w-full py-2 bg-gray-100 hover:bg-gray-200 text-gray-800 rounded-lg text-sm font-medium transition-colors">
-                Calculate Impact
-              </button>
+              <span className={`text-xs font-semibold px-3 py-1 rounded-full border bg-gradient-to-r ${riskBg} ${riskColor}`}>
+                {riskLevel}
+              </span>
             </div>
-            {simProjectedGSI !== null && (
-              <div className="p-6 bg-gray-50 rounded-xl border text-center">
-                <p className="text-sm font-medium text-gray-500 mb-1">Projected Sustainability Index (National)</p>
-                <p className={`text-4xl font-bold ${simProjectedGSI > 70 ? 'text-green-600' : simProjectedGSI > 40 ? 'text-yellow-600' : 'text-red-600'}`}>
-                  {simProjectedGSI}%
-                </p>
-              </div>
-            )}
+
+            {/* Scenario presets */}
+            <div className="flex gap-2 flex-wrap">
+              {PRESETS.map(p => (
+                <button key={p.label} onClick={() => {
+                  setSimRainfall(p.rain); setSimExtraction(p.ext);
+                  setSimRWH(p.rwh); setSimCrop(p.crop); setSimIndustrial(p.ind);
+                }} className={`text-xs font-medium px-3 py-1 rounded-full border transition-colors hover:opacity-80 ${p.color}`}>
+                  {p.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Sliders */}
+            <div className="space-y-3 bg-gray-50 rounded-xl p-4 border border-gray-200">
+              {sliders.map(({ label, min, max, val, set, unit, color, desc }) => (
+                <div key={label}>
+                  <div className="flex justify-between items-baseline mb-0.5">
+                    <span className="text-xs font-semibold text-gray-700">{label}</span>
+                    <span className="text-xs font-bold text-gray-900">
+                      {val > 0 && min < 0 ? '+' : ''}{val}{unit}
+                    </span>
+                  </div>
+                  <input
+                    type="range" min={min} max={max} value={val}
+                    onChange={e => set(Number(e.target.value))}
+                    className={`w-full h-1.5 ${color} cursor-pointer`}
+                  />
+                  <p className="text-xs text-gray-400 mt-0.5">{desc}</p>
+                </div>
+              ))}
+            </div>
+
+            {/* Output metrics grid */}
+            <div className="grid grid-cols-3 gap-2">
+              {[
+                { label: 'Projected GSI',    value: projGSI.toFixed(0),        unit: '/100',   color: projGSI > 70 ? 'text-green-600' : projGSI > 45 ? 'text-yellow-600' : 'text-red-600', icon: '🌊' },
+                { label: 'Depletion Rate',   value: depletionRate.toFixed(0),   unit: '%',      color: depletionRate < 30 ? 'text-green-600' : depletionRate < 60 ? 'text-yellow-600' : 'text-red-600', icon: '📉' },
+                { label: 'Recharge Rate',    value: rechargeRate.toFixed(0),    unit: '%',      color: rechargeRate > 60 ? 'text-green-600' : rechargeRate > 35 ? 'text-yellow-600' : 'text-red-600', icon: '💧' },
+                { label: 'Extraction Idx',   value: extractIndex.toFixed(0),    unit: '%',      color: extractIndex < 40 ? 'text-green-600' : extractIndex < 70 ? 'text-yellow-600' : 'text-red-600', icon: '⛏️' },
+                { label: 'Net Balance',      value: netBalance > 0 ? `+${netBalance.toFixed(0)}` : netBalance.toFixed(0), unit: 'mm/yr', color: netBalance > 0 ? 'text-green-600' : 'text-red-600', icon: '⚖️' },
+                { label: 'Recovery',         value: yearsToRecover ? `${Math.min(yearsToRecover, 99)}` : '∞', unit: 'yrs',   color: yearsToRecover && yearsToRecover < 20 ? 'text-green-600' : yearsToRecover && yearsToRecover < 50 ? 'text-yellow-600' : 'text-red-600', icon: '🔄' },
+              ].map(({ label, value, unit, color, icon }) => (
+                <div key={label} className="bg-white rounded-xl border border-gray-200 p-3 text-center shadow-sm">
+                  <div className="text-lg mb-0.5">{icon}</div>
+                  <p className={`text-xl font-bold leading-none ${color}`}>{value}<span className="text-xs font-normal text-gray-400 ml-0.5">{unit}</span></p>
+                  <p className="text-xs text-gray-500 mt-1 leading-tight">{label}</p>
+                </div>
+              ))}
+            </div>
+
+            {/* 10-year projection chart */}
+            <div className="bg-white rounded-xl border border-gray-200 p-4">
+              <p className="text-xs font-semibold text-gray-700 mb-3">📈 10-Year Aquifer Level Projection</p>
+              <ResponsiveContainer width="100%" height={140}>
+                <LineChart data={projectionData} margin={{ top: 4, right: 4, left: -24, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
+                  <XAxis dataKey="year" tick={{ fontSize: 9, fill: '#9ca3af' }} />
+                  <YAxis tick={{ fontSize: 9, fill: '#9ca3af' }} domain={['auto', 'auto']} />
+                  <Tooltip
+                    formatter={(v, name) => [`${v} m bgl`, name === 'level' ? 'With Intervention' : 'Baseline (no action)']}
+                    contentStyle={{ fontSize: '11px', borderRadius: '8px' }}
+                  />
+                  <Legend wrapperStyle={{ fontSize: '10px' }} />
+                  <Line type="monotone" dataKey="baseline" stroke="#ef4444" strokeDasharray="4 2" dot={false} name="Baseline" strokeWidth={1.5} />
+                  <Line type="monotone" dataKey="level"    stroke="#10b981" dot={false}               name="Intervention" strokeWidth={2} />
+                </LineChart>
+              </ResponsiveContainer>
+              <p className="text-xs text-gray-400 text-center mt-2">
+                {newTrend > 0
+                  ? `✅ Aquifer recovers at +${recoveryRate.toFixed(2)} m/yr under this scenario`
+                  : newTrend < baseTrend
+                    ? `⚠️ Intervention slows decline to ${newTrend.toFixed(2)} m/yr (was ${baseTrend} m/yr)`
+                    : `🔴 Aquifer continues declining at ${newTrend.toFixed(2)} m/yr — increase intervention`
+                }
+              </p>
+            </div>
           </div>
         );
+      }
+
       case 'Policy Impact Analysis':
         const POLICY_DATA = {
           'Subsidized Micro-Irrigation': {
@@ -1045,7 +1145,10 @@ function PolicyTools({ summary, selectedStation }) {
 
         {activeModal && (
           <div className="fixed inset-0 bg-gray-900/50 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-in fade-in duration-200">
-          <div className={`bg-white rounded-2xl shadow-2xl ${activeModal === 'Policy Impact Analysis' ? 'max-w-2xl' : 'max-w-lg'} w-full p-6 relative animate-in zoom-in-95 duration-200`}>
+          <div className={`bg-white rounded-2xl shadow-2xl ${
+            activeModal === 'Policy Impact Analysis' || activeModal === 'Conservation Strategy Simulator'
+              ? 'max-w-2xl' : 'max-w-lg'
+          } w-full p-6 relative animate-in zoom-in-95 duration-200`}>
               <button onClick={() => setActiveModal(null)} className="absolute top-4 right-4 text-gray-400 hover:text-gray-700 hover:bg-gray-100 p-1 rounded-full transition-colors">
                 <X className="w-5 h-5" />
               </button>
