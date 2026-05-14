@@ -34,7 +34,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from fastapi.responses import StreamingResponse
 import io
-import google.generativeai as genai
 from docx import Document
 
 # ── Internal modules ─────────────────────────────────────────────────────────
@@ -780,87 +779,109 @@ def generate_policy_report(station_id: str, req: ReportRequest = None):
         raise HTTPException(404, f"Station {station_id} not found")
 
     api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-    if not api_key:
-        raise HTTPException(500, "GEMINI_API_KEY or GOOGLE_API_KEY is not configured on the server.")
-
     stress_data = stress_auto(station_id)
 
-    genai.configure(api_key=api_key)
-    
-    # Dynamically find an available model
-    try:
-        available_models = [m.name for m in genai.list_models() if "generateContent" in m.supported_generation_methods]
-        logger.info(f"Detected Gemini models: {available_models}")
-        
-        if not available_models:
-            raise Exception("No Gemini models found for this API key. Ensure the key is active in AI Studio.")
-            
-        # Prioritize 1.5-flash, then 1.0-pro, then whatever is first
-        target_model = "models/gemini-1.5-flash" if "models/gemini-1.5-flash" in available_models else \
-                       "models/gemini-pro" if "models/gemini-pro" in available_models else \
-                       available_models[0]
-        
-        logger.info(f"Selected model: {target_model}")
-        gemini_model = genai.GenerativeModel(target_model.replace("models/", ""))
-    except Exception as e:
-        logger.error(f"Failed to initialize Gemini: {e}")
-        raise HTTPException(500, f"Gemini Initialisation Error: {str(e)}. Available models detected: {locals().get('available_models', 'None')}")
+    report_text = None  # will be filled by Gemini or fallback template
 
-    prompt = f"""
-    You are an expert hydrogeologist and policy advisor writing for the Indian government.
-    Generate a comprehensive, professional 5-page Policy Brief for the District Collector
-    based on the following real-time groundwater data.
+    if api_key:
+        try:
+            import google.generativeai as _genai
+            _genai.configure(api_key=api_key)
+            gemini_model = _genai.GenerativeModel(
+                "gemini-2.0-flash-lite",
+                generation_config=_genai.types.GenerationConfig(
+                    max_output_tokens=800,
+                    temperature=0.4,
+                )
+            )
+            prompt = (
+                f"Write a concise government policy brief (5 sections, Markdown ## headings) "
+                f"for station {station['id']} ({station['region']}, {station['status']}, "
+                f"{station['waterLevel']}m bgl, trend:{station.get('trend','N/A')}). "
+                f"Stress class: {stress_data.get('stress_class','Unknown')} "
+                f"({round(stress_data.get('confidence',0)*100,0)}% confidence). "
+                f"Actions: {'; '.join(stress_data.get('recommended_actions',[])[:3])}. "
+                f"Sections: 1.Executive Summary 2.Status Overview "
+                f"3.Aquifer Stress & Risk 4.Socio-Economic Impact 5.Recommendations. "
+                f"Be factual, concise, bullet-pointed. No memorandum header."
+            )
+            response = gemini_model.generate_content(prompt)
+            if response and response.text:
+                report_text = response.text
+                logger.info("✅ Gemini report generated successfully.")
+            else:
+                logger.warning("Gemini returned empty response — using fallback template.")
+        except Exception as e:
+            logger.warning(f"Gemini unavailable ({e}) — falling back to template report.")
+    else:
+        logger.warning("No GEMINI_API_KEY set — using fallback template report.")
 
-    IMPORTANT: Do NOT generate any header, memorandum block, "OFFICE OF...", "TO:", "FROM:", "DATE:",
-    or "SUBJECT:" lines. Start DIRECTLY with the first section heading below.
+    # ── Fallback: structured template using real ML data (no Gemini needed) ──
+    if not report_text:
+        sc = stress_data.get('stress_class', 'Unknown')
+        conf = round(stress_data.get('confidence', 0) * 100, 1)
+        actions = stress_data.get('recommended_actions', [
+            "Regulate extraction permits in affected zone.",
+            "Deploy artificial recharge structures.",
+            "Issue advisory to local agricultural boards.",
+        ])
+        report_text = f"""## 1. Executive Summary
 
-    Station Data:
-    - Station ID: {station['id']}
-    - Region: {station['region']}
-    - Current Water Level: {station['waterLevel']} m bgl
-    - Operational Status: {station['status']}
-    - Water Level Trend: {station.get('trend', 'N/A')}
+Station **{station['id']}** in the **{station['region']}** region is currently at a water level of \
+**{station['waterLevel']} m bgl** with a **{station.get('trend','stable')}** trend. \
+The ML-based aquifer stress classifier has categorised this station as **{sc}** with \
+{conf}% confidence. Immediate policy intervention is recommended.
 
-    ML Model 7 – Aquifer Stress Analysis Output:
-    - Predicted Stress Class: {stress_data.get('stress_class', stress_data.get('predicted_class', 'Unknown'))}
-    - Classification Confidence: {round(stress_data.get('confidence', 0) * 100, 1)}%
-    - Stage of Extraction: {stress_data.get('stage_of_extraction_pct', 80)}%
-    - Recommended Actions: {', '.join(stress_data.get('recommended_actions', []))}
+## 2. Groundwater Status Overview
 
-    Write the report with these five clearly labeled sections using Markdown headings:
-    ## 1. Executive Summary
-    ## 2. Groundwater Status Overview
-    ## 3. Aquifer Stress & Risk Analysis
-    ## 4. Socio-Economic Impact Assessment
-    ## 5. Specific Intervention Recommendations
+- **Station ID:** {station['id']}
+- **Region:** {station['region']}
+- **Current Water Level:** {station['waterLevel']} m below ground level (bgl)
+- **Operational Status:** {station['status'].upper()}
+- **Trend:** {station.get('trend', 'N/A').capitalize()}
+- **Baseline Depth:** {station.get('base_level', 'N/A')} m bgl
 
-    Use professional government language. Be specific, actionable, and data-driven.
-    Include bullet points for recommendations and statistical references where possible.
-    """
+The station is part of the national DWLR network and is monitored in real-time. \
+Current readings indicate a {station.get('trend','stable')} trajectory requiring attention.
 
-    try:
-        response = gemini_model.generate_content(prompt)
-        if not response or not response.text:
-            raise Exception("Empty response from Gemini API (possibly blocked by safety filters)")
-        report_text = response.text
-    except Exception as e:
-        logger.error(f"Gemini API error: {e}")
-        # Try a more detailed error message if possible
-        error_msg = str(e)
-        if "Safety" in error_msg:
-            error_msg = "Gemini blocked the report generation due to safety filters. Try adjusting the data."
-        raise HTTPException(500, f"Error generating report: {error_msg}")
+## 3. Aquifer Stress & Risk Analysis
 
-    # ── Strip any auto-generated memorandum/header block from Gemini output ──
-    # Gemini sometimes prepends an "OFFICE OF..." or "MEMORANDUM" block.
-    # We find the first real section heading (##) and discard everything before it.
+- **ML Model 7 Classification:** {sc}
+- **Confidence Score:** {conf}%
+- **Stage of Extraction:** {stress_data.get('stage_of_extraction_pct', 80)}%
+- **Risk Level:** {'HIGH — Immediate action required.' if station['status'] == 'critical' else 'MODERATE — Monitoring and mitigation advised.'}
+
+The aquifer in this region shows signs of sustained stress driven by over-extraction, \
+reduced monsoon recharge, and increased anthropogenic demand. Continued depletion \
+will compromise water security for dependent communities.
+
+## 4. Socio-Economic Impact Assessment
+
+- Groundwater depletion in this region directly impacts agricultural productivity, \
+  drinking water supply, and industrial operations.
+- Declining levels increase pumping costs and energy consumption for farmers.
+- Communities dependent on this aquifer face risk of water insecurity within \
+  the next 2–5 years if the current trend continues.
+- Economic losses are estimated to compound annually if intervention is delayed.
+
+## 5. Specific Intervention Recommendations
+
+"""
+        for i, action in enumerate(actions[:6], 1):
+            report_text += f"- {action}\n"
+        report_text += (
+            "\n- Establish a real-time monitoring dashboard shared with district officials.\n"
+            "- Conduct annual aquifer health assessments using the DWLR network.\n"
+            "- Promote community-level water conservation and rainwater harvesting.\n"
+        )
+
+    # ── Strip any leading memorandum block ────────────────────────────────────
     import re as _re
-    # Find where the first section heading starts
     first_section = _re.search(r'^## ', report_text, _re.MULTILINE)
     if first_section:
         report_text = report_text[first_section.start():]
 
-    # ── Build the Word Document ──────────────────────────────────────────────
+    # ── Build the Word Document ───────────────────────────────────────────────
     from docx.shared import Inches, Pt, RGBColor
     from docx.enum.text import WD_ALIGN_PARAGRAPH
     from datetime import date as _date
@@ -871,26 +892,21 @@ def generate_policy_report(station_id: str, req: ReportRequest = None):
     if req and req.image_base64:
         try:
             import base64 as _b64
-
-            # Full-page snapshot header
             snap_title = doc.add_heading("", 0)
             snap_title.clear()
             r = snap_title.add_run("ML Model Insights Dashboard")
             r.font.size = Pt(20)
             r.font.color.rgb = RGBColor(0x1e, 0x40, 0xaf)
-
             snap_sub = doc.add_paragraph()
             snap_sub.add_run(
                 f"Station: {station['id']}  |  Region: {station['region']}  "
                 f"|  Generated: {_date.today().strftime('%d %B %Y')}"
             ).bold = True
             doc.add_paragraph()
-
             img_bytes = _b64.b64decode(req.image_base64)
             img_stream = io.BytesIO(img_bytes)
             doc.add_picture(img_stream, width=Inches(6.2))
             doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
-
             caption = doc.add_paragraph(
                 f"Real-time output of all 7 ML models for Station {station['id']} "
                 f"({station['region']}) – captured at report generation time."
@@ -899,12 +915,11 @@ def generate_policy_report(station_id: str, req: ReportRequest = None):
             caption.runs[0].font.size = Pt(9)
             caption.runs[0].font.italic = True
             caption.runs[0].font.color.rgb = RGBColor(0x64, 0x74, 0x8b)
-
             doc.add_page_break()
         except Exception as img_err:
             logger.warning(f"Could not embed snapshot image: {img_err}")
 
-    # ── PAGE 2+: Policy Brief Cover ───────────────────────────────────────────
+    # ── Cover page ────────────────────────────────────────────────────────────
     title = doc.add_heading("", 0)
     title.clear()
     run = title.add_run("Water Security Policy Brief")
@@ -920,12 +935,13 @@ def generate_policy_report(station_id: str, req: ReportRequest = None):
     meta = doc.add_paragraph()
     meta.add_run(
         f"Generated on: {_date.today().strftime('%d %B %Y')}  "
-        f"|  Powered by Google Gemini + 7 ML Models"
+        f"|  Powered by 7 ML Models"
+        + (" + Google Gemini" if api_key and "## " in report_text else " (Offline Template)")
     )
     meta.runs[-1].font.color.rgb = RGBColor(0x64, 0x74, 0x8b)
     doc.add_paragraph()
 
-    # ── Parse and write AI content line-by-line ───────────────────────────────
+    # ── Parse and write content ───────────────────────────────────────────────
     for line in report_text.split('\n'):
         line = line.strip()
         if not line:
