@@ -787,7 +787,7 @@ def generate_policy_report(station_id: str, req: ReportRequest = None):
     stress_data = stress_auto(station_id)
 
     genai.configure(api_key=api_key)
-    gemini_model = genai.GenerativeModel("gemini-1.5-flash-latest")
+    gemini_model = genai.GenerativeModel("gemini-1.5-flash")
 
     prompt = f"""
     You are an expert hydrogeologist and policy advisor writing for the Indian government.
