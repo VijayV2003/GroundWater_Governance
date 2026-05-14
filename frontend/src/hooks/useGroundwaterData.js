@@ -10,6 +10,7 @@ import {
   fetchStations, fetchDashboardSummary, fetchRegionalSummary,
   fetchAlerts, fetchForecast, fetchDHSF, fetchAnomalies,
   fetchRecharge, fetchGSI, fetchDHERP, fetchStress, fetchFullReport,
+  generateReport,
   MOCK_STATIONS, MOCK_SUMMARY, MOCK_RECHARGE, MOCK_FORECAST,
 } from '../api/groundwaterApi';
 
@@ -248,6 +249,8 @@ export function useFullReport(stationId) {
     null,
   );
 }
+
+export { generateReport };
 
 // ─── Utility ──────────────────────────────────────────────────────────────────
 

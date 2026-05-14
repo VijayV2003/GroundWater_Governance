@@ -102,6 +102,20 @@ export const fetchStress = (stationId) =>
 export const fetchFullReport = (stationId) =>
   get(`/api/station/${stationId}/full-report`);
 
+/** Generate a policy brief Word document via Gemini. */
+export const generateReport = async (stationId, imageBase64) => {
+  const res = await fetch(`${BASE_URL}/api/policy/generate-report/${stationId}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ image_base64: imageBase64 }),
+  });
+  if (!res.ok) {
+    const errData = await res.json().catch(() => ({}));
+    throw new Error(errData.detail || "Failed to generate report");
+  }
+  return res.blob();
+};
+
 // ─── Mock fallback data ───────────────────────────────────────────────────────
 // Used when the backend isn't running so the UI still renders in dev mode.
 

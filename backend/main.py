@@ -780,14 +780,14 @@ def generate_policy_report(station_id: str, req: ReportRequest = None):
     if not station:
         raise HTTPException(404, f"Station {station_id} not found")
 
-    api_key = os.getenv("GEMINI_API_KEY")
+    api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
     if not api_key:
-        raise HTTPException(500, "GEMINI_API_KEY is not configured on the server.")
+        raise HTTPException(500, "GEMINI_API_KEY or GOOGLE_API_KEY is not configured on the server.")
 
     stress_data = stress_auto(station_id)
 
     genai.configure(api_key=api_key)
-    gemini_model = genai.GenerativeModel("gemini-flash-latest")
+    gemini_model = genai.GenerativeModel("gemini-1.5-flash-latest")
 
     prompt = f"""
     You are an expert hydrogeologist and policy advisor writing for the Indian government.
@@ -823,10 +823,16 @@ def generate_policy_report(station_id: str, req: ReportRequest = None):
 
     try:
         response = gemini_model.generate_content(prompt)
+        if not response or not response.text:
+            raise Exception("Empty response from Gemini API (possibly blocked by safety filters)")
         report_text = response.text
     except Exception as e:
         logger.error(f"Gemini API error: {e}")
-        raise HTTPException(500, f"Error generating report: {str(e)}")
+        # Try a more detailed error message if possible
+        error_msg = str(e)
+        if "Safety" in error_msg:
+            error_msg = "Gemini blocked the report generation due to safety filters. Try adjusting the data."
+        raise HTTPException(500, f"Error generating report: {error_msg}")
 
     # ── Strip any auto-generated memorandum/header block from Gemini output ──
     # Gemini sometimes prepends an "OFFICE OF..." or "MEMORANDUM" block.

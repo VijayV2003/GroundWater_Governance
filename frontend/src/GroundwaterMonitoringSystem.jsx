@@ -32,7 +32,7 @@ import { useAuth } from './context/AuthContext';
 
 import {
   useStations, useDashboardSummary, useRegionalSummary,
-  useAlerts, useForecast, useDHSF, useRecharge,
+  useAlerts, useForecast, useDHSF, useRecharge, generateReport
 } from './hooks/useGroundwaterData';
 import { useGSI } from './hooks/useGroundwaterData';
 import ModelInsights from './components/ModelInsights';
@@ -765,14 +765,9 @@ function PolicyTools({ summary, selectedStation }) {
                         });
                         imageBase64 = canvas.toDataURL('image/png').split(',')[1];
                       }
-                      // 2. POST snapshot + station to backend
-                      const res = await fetch(`http://localhost:8000/api/policy/generate-report/${selectedStation.id}`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ image_base64: imageBase64 }),
-                      });
-                      if (!res.ok) throw new Error("Failed to generate report");
-                      const blob = await res.blob();
+                      // 2. Call centralized API client
+                      const blob = await generateReport(selectedStation.id, imageBase64);
+                      
                       const url = window.URL.createObjectURL(blob);
                       const a = document.createElement('a');
                       a.href = url;
@@ -783,7 +778,7 @@ function PolicyTools({ summary, selectedStation }) {
                       document.body.removeChild(a);
                       setActiveModal(null);
                     } catch (err) {
-                      alert("Error generating report. Ensure backend is running and GEMINI_API_KEY is configured.");
+                      alert(`Error generating report: ${err.message}`);
                     } finally {
                       setIsGeneratingReport(false);
                     }
