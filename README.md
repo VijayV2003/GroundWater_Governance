@@ -53,8 +53,8 @@ The **Groundwater Intelligence Platform** is a full-stack decision-support syste
 | Service | URL |
 |---|---|
 | **Frontend** | https://ground-water-governance.vercel.app  |
-| **Backend API** | [https://your-service.onrender.com](https://groundwater-governance.onrender.com/docs) |
-| **API Docs** |[ https://your-service.onrender.com/docs](https://groundwater-governance.onrender.com/docs) |
+| **Backend API** | [https://groundwater-governance.onrender.com](https://groundwater-governance.onrender.com/docs) |
+| **API Docs** |[ https://groundwater-governance.onrender.com/docs](https://groundwater-governance.onrender.com/docs) |
 
 ---
 
