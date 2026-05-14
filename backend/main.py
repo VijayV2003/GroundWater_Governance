@@ -231,102 +231,106 @@ async def send_email_updates():
 
 
 
+import threading
+_model_lock = threading.Lock()
+
+def _get_detector():
+    global _detector
+    if _detector is None:
+        with _model_lock:
+            if _detector is None:
+                import joblib as _jl
+                path = os.path.join(SAVED_MODELS_DIR, "global_anomaly_detector.joblib")
+                if os.path.exists(path):
+                    _detector = AnomalyDetector.load(path)
+                else:
+                    ref_df = get_time_series_for_station(_real_stations[0]["id"])
+                    _detector = AnomalyDetector()
+                    _detector.fit(ref_df)
+                    _detector.save(path)
+    return _detector
+
+def _get_dhsf():
+    global _dhsf
+    if _dhsf is None:
+        with _model_lock:
+            if _dhsf is None:
+                import joblib as _jl
+                path = os.path.join(SAVED_MODELS_DIR, "dhsf_model.joblib")
+                if os.path.exists(path):
+                    _dhsf = _jl.load(path)
+                else:
+                    _dhsf = DHSFModel()
+                    _dhsf.train()
+                    _jl.dump(_dhsf, path)
+    return _dhsf
+
+def _get_recharge():
+    global _recharge
+    if _recharge is None:
+        with _model_lock:
+            if _recharge is None:
+                import joblib as _jl
+                path = os.path.join(SAVED_MODELS_DIR, "recharge_predictor.joblib")
+                if os.path.exists(path):
+                    _recharge = _jl.load(path)
+                else:
+                    _recharge = RechargePredictor()
+                    _recharge.train()
+                    _jl.dump(_recharge, path)
+    return _recharge
+
+def _get_stress_clf():
+    global _stress_clf
+    if _stress_clf is None:
+        with _model_lock:
+            if _stress_clf is None:
+                import joblib as _jl
+                path = os.path.join(SAVED_MODELS_DIR, "stress_classifier.joblib")
+                if os.path.exists(path):
+                    _stress_clf = _jl.load(path)
+                else:
+                    _stress_clf = AquiferStressClassifier()
+                    _stress_clf.train()
+                    _jl.dump(_stress_clf, path)
+    return _stress_clf
+
+def _get_forecaster(station_id: str):
+    if station_id not in _forecasters:
+        with _model_lock:
+            if station_id not in _forecasters:
+                import joblib as _jl
+                fc_path = os.path.join(SAVED_MODELS_DIR, f"forecaster_{station_id}.joblib")
+                if os.path.exists(fc_path):
+                    _forecasters[station_id] = GroundwaterForecaster.load(fc_path)
+                else:
+                    hist_df = get_time_series_for_station(station_id)
+                    fc = GroundwaterForecaster(lags=7)
+                    fc.fit(hist_df["water_level"].values)
+                    fc.save(fc_path)
+                    _forecasters[station_id] = fc
+    return _forecasters[station_id]
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
-    Warm up all ML models at startup.
-    Priority: load pre-trained .joblib files → fall back to in-process training.
-    All models are persisted to disk after first training to eliminate latency
-    on subsequent restarts. All 5 station forecasters are pre-warmed so the
-    first API request is served instantly.
+    Lightweight startup — only loads station index (~1 MB).
+    All ML models are lazy-loaded on first request to stay within
+    Render free tier 512 MB memory limit.
     """
-    global _dhsf, _detector, _recharge, _stress_clf, _real_stations
+    global _real_stations
 
-    logger.info("🌊 Groundwater Intelligence Platform starting …")
-    logger.info("   Data source: 5 synthetic DWLR stations (Atal Jal schema)")
-
+    logger.info("🌊 Groundwater Intelligence Platform starting (memory-efficient mode) …")
     os.makedirs(SAVED_MODELS_DIR, exist_ok=True)
 
-    # ── Load real station index (5 planned stations only) ─────────────────────
-    logger.info("  Loading DWLR station index …")
+    # Only load the lightweight station index at startup
     _real_stations = load_real_stations(limit=5)
-    logger.info(f"  ✓ {len(_real_stations)} stations ready")
-
-    # ── Anomaly Detector ─────────────────────────────────────────────────────
-    detector_path = os.path.join(SAVED_MODELS_DIR, "global_anomaly_detector.joblib")
-    if os.path.exists(detector_path):
-        logger.info("  Loading pre-trained anomaly detector from cache …")
-        _detector = AnomalyDetector.load(detector_path)
-        logger.info("  ✓ Anomaly detector loaded (cached)")
-    else:
-        logger.info("  Training anomaly detector (first run — will be cached) …")
-        ref_df = get_time_series_for_station(_real_stations[0]["id"])
-        _detector = AnomalyDetector()
-        _detector.fit(ref_df)
-        _detector.save(detector_path)
-        logger.info("  ✓ Anomaly detector trained + saved to disk")
-
-    # ── DHSF  ────────────────────────────────────────────────────────────────
-    dhsf_path = os.path.join(SAVED_MODELS_DIR, "dhsf_model.joblib")
-    if os.path.exists(dhsf_path):
-        logger.info("  Loading DHSF classifier from cache …")
-        import joblib as _jl
-        _dhsf = _jl.load(dhsf_path)
-        logger.info("  ✓ DHSF loaded (cached)")
-    else:
-        logger.info("  Training DHSF depletion classifier (first run) …")
-        import joblib as _jl
-        _dhsf = DHSFModel()
-        _dhsf.train()
-        _jl.dump(_dhsf, dhsf_path)
-        logger.info("  ✓ DHSF trained + saved to disk")
-
-    # ── Recharge Predictor ───────────────────────────────────────────────────
-    recharge_path = os.path.join(SAVED_MODELS_DIR, "recharge_predictor.joblib")
-    if os.path.exists(recharge_path):
-        logger.info("  Loading recharge predictor from cache …")
-        _recharge = _jl.load(recharge_path)
-        logger.info("  ✓ Recharge predictor loaded (cached)")
-    else:
-        logger.info("  Training recharge predictor (first run) …")
-        _recharge = RechargePredictor()
-        _recharge.train()
-        _jl.dump(_recharge, recharge_path)
-        logger.info("  ✓ Recharge predictor trained + saved to disk")
-
-    # ── Aquifer Stress Classifier ─────────────────────────────────────────────
-    stress_path = os.path.join(SAVED_MODELS_DIR, "stress_classifier.joblib")
-    if os.path.exists(stress_path):
-        logger.info("  Loading aquifer stress classifier from cache …")
-        _stress_clf = _jl.load(stress_path)
-        logger.info("  ✓ Stress classifier loaded (cached)")
-    else:
-        logger.info("  Training aquifer stress classifier (first run) …")
-        _stress_clf = AquiferStressClassifier()
-        _stress_clf.train()
-        _jl.dump(_stress_clf, stress_path)
-        logger.info("  ✓ Stress classifier trained + saved to disk")
-
-    # This eliminates per-request training latency on the first API hit.
-    logger.info("  Pre-warming forecasters for all 5 stations …")
-    for station in _real_stations:
-        sid = station["id"]
-        fc_path = os.path.join(SAVED_MODELS_DIR, f"forecaster_{sid}.joblib")
-        if os.path.exists(fc_path):
-            _forecasters[sid] = GroundwaterForecaster.load(fc_path)
-            logger.info(f"    ✓ Forecaster for {sid} loaded from cache")
-        else:
-            hist_df = get_time_series_for_station(sid)
-            fc = GroundwaterForecaster(lags=7)
-            fc.fit(hist_df["water_level"].values)
-            fc.save(fc_path)
-            _forecasters[sid] = fc
-            logger.info(f"    ✓ Forecaster for {sid} trained + cached")
+    logger.info(f"  ✓ {len(_real_stations)} stations ready (ML models load on first request)")
 
     # Start the 5-minute background email task
     email_task = asyncio.create_task(send_email_updates())
 
-    logger.info("🚀 All models ready — serving real-time groundwater intelligence")
+    logger.info("🚀 Ready — ML models will load lazily on first request")
     yield
     logger.info("Shutting down …")
 
@@ -547,18 +551,10 @@ def forecast_water_level(req: ForecastRequest) -> Dict:
 
     if req.station_id in _forecasters:
         fc = _forecasters[req.station_id]
-        # Re-fit only if caller wants more history than cached model saw
         fc.fit(hist_df["water_level"].values)
     else:
-        fc = GroundwaterForecaster(lags=7)
+        fc = _get_forecaster(req.station_id)
         result = fc.forecast_api_response(req.station_id, hist_df, req.horizon_days)
-        # Cache + persist for future calls
-        _forecasters[req.station_id] = fc
-        fc_path = os.path.join(SAVED_MODELS_DIR, f"forecaster_{req.station_id}.joblib")
-        try:
-            fc.save(fc_path)
-        except Exception:
-            pass
         return result
 
     result = fc.forecast_api_response(req.station_id, hist_df, req.horizon_days)
@@ -579,7 +575,7 @@ def forecast_default(station_id: str) -> Dict:
 @app.post("/api/models/dhsf", tags=["Model 2 – DHSF"])
 def classify_depletion_cause(req: DHSFRequest) -> Dict:
     feats  = req.model_dump(exclude={"station_id"})
-    result = _dhsf.predict(feats)
+    result = _get_dhsf().predict(feats)
     result["station_id"] = req.station_id
     return result
 
@@ -600,7 +596,7 @@ def dhsf_auto(station_id: str) -> Dict:
         "seasonal_amplitude_m":      float(levels.max() - levels.min()),
         "recharge_deficit_mm":       max(0.0, se.get("evapotranspiration_mm", 1000) - se.get("annual_rainfall_mm", 900)),
     }
-    result = _dhsf.predict(feats)
+    result = _get_dhsf().predict(feats)
     result["station_id"] = station_id
     result["trend_m_per_year"] = round(trend_yr, 3)
     return result
@@ -614,7 +610,7 @@ def dhsf_auto(station_id: str) -> Dict:
 def detect_anomalies(station_id: str, days: int = 365) -> Dict:
     """Detect anomalies in a station's real + extrapolated time-series."""
     hist_df = _get_hist_df(station_id, days)
-    return _detector.detect(hist_df, station_id)
+    return _get_detector().detect(hist_df, station_id)
 
 
 @app.get("/api/alerts", tags=["Model 3 – Anomaly Detection"])
@@ -624,15 +620,16 @@ def get_alerts(limit: int = 20) -> List[Dict]:
     Returns live-style alert list for the dashboard.
     """
     station_results = []
-    for s in _real_stations[:20]:   # check first 20 for speed
+    det = _get_detector()
+    for s in _real_stations[:20]:
         try:
             hist_df = get_time_series_for_station(s["id"], interpolate_daily=True)
             if hist_df is not None and len(hist_df) >= 7:
-                res = _detector.detect(hist_df.tail(365), s["id"])
+                res = det.detect(hist_df.tail(365), s["id"])
                 station_results.append(res)
         except Exception:
             continue
-    return _detector.generate_alerts(station_results)[:limit]
+    return det.generate_alerts(station_results)[:limit]
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -641,28 +638,30 @@ def get_alerts(limit: int = 20) -> List[Dict]:
 
 @app.post("/api/models/recharge", tags=["Model 4 – Recharge Prediction"])
 def predict_recharge(req: RechargeRequest) -> Dict:
-    monthly = _recharge.predict_annual(
+    monthly = _get_recharge().predict_annual(
         annual_rainfall_mm=req.annual_rainfall_mm,
         evapotranspiration_mm=req.evapotranspiration_mm,
         soil_moisture_pct=req.soil_moisture_pct,
         surface_water_level_m=req.surface_water_level_m,
         land_use_idx=req.land_use_idx,
     )
-    return {"station_id": req.station_id, "recharge_data": monthly, "summary": _recharge.monsoon_summary(monthly)}
+    rch = _get_recharge()
+    return {"station_id": req.station_id, "recharge_data": monthly, "summary": rch.monsoon_summary(monthly)}
 
 
 @app.get("/api/models/recharge/{station_id}", tags=["Model 4 – Recharge Prediction"])
 def recharge_auto(station_id: str) -> Dict:
     station = _get_real_station(station_id) or {}
     se      = _auto_socioeconomic(station)
-    monthly = _recharge.predict_annual(
+    rch = _get_recharge()
+    monthly = rch.predict_annual(
         annual_rainfall_mm=se["annual_rainfall_mm"],
         evapotranspiration_mm=se["evapotranspiration_mm"],
         soil_moisture_pct=60.0,
         surface_water_level_m=se["surface_water_index"] * 10,
         land_use_idx=se["agricultural_area_pct"] / 100,
     )
-    return {"station_id": station_id, "recharge_data": monthly, "summary": _recharge.monsoon_summary(monthly)}
+    return {"station_id": station_id, "recharge_data": monthly, "summary": rch.monsoon_summary(monthly)}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -738,7 +737,7 @@ def dherp_auto(station_id: str) -> Dict:
 @app.post("/api/models/stress", tags=["Model 7 – Aquifer Stress"])
 def classify_stress(req: StressRequest) -> Dict:
     feats  = req.model_dump(exclude={"station_id"})
-    result = _stress_clf.predict(feats)
+    result = _get_stress_clf().predict(feats)
     result["station_id"] = req.station_id
     return result
 
@@ -760,7 +759,7 @@ def stress_auto(station_id: str) -> Dict:
         "stage_of_extraction_pct": 80.0,
         "number_of_wells_per_km2": 20.0,
     }
-    result = _stress_clf.predict(feats)
+    result = _get_stress_clf().predict(feats)
     result["station_id"] = station_id
     return result
 
