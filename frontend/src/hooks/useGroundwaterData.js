@@ -96,7 +96,7 @@ const STATION_PROFILES = {
   'DWLR001': { // Delhi - Normal, stable
     forecastTrend: 'stable', levelOffset: 0,
     dhsf: { cause: 'urban', conf: 0.82, factors: [{factor: 'Urban Growth', value: 55, color: '#10b981'}, {factor: 'Climate Impact', value: 25, color: '#f59e0b'}, {factor: 'Industrial Use', value: 20, color: '#8b5cf6'}] },
-    anomalies: { status: 'normal', count: 0, list: [] },
+    anomalies: { status: 'normal', count: 0, list: [], latest_level: 45.2, latest_delta: -0.02 },
     rechargeMod: 1,
     gsi: { score: 82, band: 'Safe', color: '#10b981', subs: { level_deficit: 85, recharge_balance: 80, trend: 85, climate_support: 75 } },
     dherp: { cost: 12.5, energy: 0.8, time: 6, index: 85 },
@@ -105,7 +105,7 @@ const STATION_PROFILES = {
   'DWLR002': { // Mumbai - Warning, declining
     forecastTrend: 'declining', levelOffset: -12.4,
     dhsf: { cause: 'industrial', conf: 0.75, factors: [{factor: 'Industrial Use', value: 60, color: '#8b5cf6'}, {factor: 'Urban Growth', value: 30, color: '#10b981'}, {factor: 'Climate Impact', value: 10, color: '#f59e0b'}] },
-    anomalies: { status: 'warning', count: 2, list: [{type: 'Rapid_Drawdown', severity: 'warning', description: 'Unusual drop of 0.8m over weekend'}, {type: 'Quality_Shift', severity: 'warning', description: 'Salinity indicator rising'}] },
+    anomalies: { status: 'warning', count: 2, list: [{type: 'Rapid_Drawdown', severity: 'warning', description: 'Unusual drop of 0.8m over weekend'}, {type: 'Quality_Shift', severity: 'warning', description: 'Salinity indicator rising'}], latest_level: 38.4, latest_delta: -0.12 },
     rechargeMod: 1.2,
     gsi: { score: 58, band: 'Moderate', color: '#f59e0b', subs: { level_deficit: 50, recharge_balance: 65, trend: 45, climate_support: 70 } },
     dherp: { cost: 85.0, energy: 4.2, time: 24, index: 45 },
@@ -114,7 +114,7 @@ const STATION_PROFILES = {
   'DWLR003': { // Chennai - Critical, declining
     forecastTrend: 'declining', levelOffset: -16.7,
     dhsf: { cause: 'climate', conf: 0.89, factors: [{factor: 'Climate Impact', value: 45, color: '#f59e0b'}, {factor: 'Agricultural Use', value: 35, color: '#3b82f6'}, {factor: 'Urban Growth', value: 20, color: '#10b981'}] },
-    anomalies: { status: 'critical', count: 4, list: [{type: 'Depletion_Alert', severity: 'critical', description: 'Breached historic low'}, {type: 'Seawater_Intrusion', severity: 'critical', description: 'High risk of irreversible contamination'}] },
+    anomalies: { status: 'critical', count: 4, list: [{type: 'Depletion_Alert', severity: 'critical', description: 'Breached historic low'}, {type: 'Seawater_Intrusion', severity: 'critical', description: 'High risk of irreversible contamination'}], latest_level: 41.2, latest_delta: -0.31 },
     rechargeMod: 0.4,
     gsi: { score: 24, band: 'Critical', color: '#ef4444', subs: { level_deficit: 15, recharge_balance: 20, trend: 10, climate_support: 50 } },
     dherp: { cost: 240.5, energy: 12.5, time: 60, index: 12 },
@@ -123,7 +123,7 @@ const STATION_PROFILES = {
   'DWLR004': { // Bangalore - Normal, rising
     forecastTrend: 'rising', levelOffset: 10.1,
     dhsf: { cause: 'agricultural', conf: 0.68, factors: [{factor: 'Agricultural Use', value: 50, color: '#3b82f6'}, {factor: 'Urban Growth', value: 30, color: '#10b981'}, {factor: 'Climate Impact', value: 20, color: '#f59e0b'}] },
-    anomalies: { status: 'normal', count: 0, list: [] },
+    anomalies: { status: 'normal', count: 0, list: [], latest_level: 52.1, latest_delta: 0.08 },
     rechargeMod: 1.5,
     gsi: { score: 76, band: 'Safe', color: '#10b981', subs: { level_deficit: 70, recharge_balance: 85, trend: 80, climate_support: 70 } },
     dherp: { cost: 22.0, energy: 1.2, time: 10, index: 75 },
@@ -132,7 +132,7 @@ const STATION_PROFILES = {
   'DWLR005': { // Kolkata - Normal, stable
     forecastTrend: 'stable', levelOffset: 3.5,
     dhsf: { cause: 'agricultural', conf: 0.77, factors: [{factor: 'Agricultural Use', value: 65, color: '#3b82f6'}, {factor: 'Industrial Use', value: 20, color: '#8b5cf6'}, {factor: 'Urban Growth', value: 15, color: '#10b981'}] },
-    anomalies: { status: 'normal', count: 1, list: [{type: 'Sensor_Drift', severity: 'warning', description: 'Minor calibration offset detected'}] },
+    anomalies: { status: 'normal', count: 1, list: [{type: 'Sensor_Drift', severity: 'warning', description: 'Minor calibration offset detected'}], latest_level: 47.3, latest_delta: 0.01 },
     rechargeMod: 1.1,
     gsi: { score: 68, band: 'Moderate', color: '#f59e0b', subs: { level_deficit: 65, recharge_balance: 75, trend: 60, climate_support: 70 } },
     dherp: { cost: 45.2, energy: 2.4, time: 18, index: 60 },
@@ -178,7 +178,13 @@ export function useDHSF(stationId) {
 /** Model 3 – Anomaly detection for a station. */
 export function useAnomalies(stationId) {
   const prof = STATION_PROFILES[stationId] || STATION_PROFILES['DWLR001'];
-  const fallback = { status: prof.anomalies.status, anomalies: prof.anomalies.list, anomaly_count: prof.anomalies.count };
+  const fallback = {
+    status: prof.anomalies.status,
+    anomalies: prof.anomalies.list,
+    anomaly_count: prof.anomalies.count,
+    latest_level: prof.anomalies.latest_level,
+    latest_delta: prof.anomalies.latest_delta,
+  };
   return useAsync(
     () => stationId ? fetchAnomalies(stationId) : Promise.resolve(fallback),
     [stationId],

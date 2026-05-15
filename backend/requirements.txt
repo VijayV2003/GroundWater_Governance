@@ -1,14 +1,18 @@
-fastapi
-uvicorn
-pandas
-numpy
-scikit-learn
-joblib
-xgboost
-sendgrid
-python-dotenv
-gunicorn
-requests
-google-generativeai
-python-docx
-markdown
+fastapi==0.111.0
+uvicorn==0.29.0
+gunicorn==21.2.0
+pydantic==2.7.0
+python-dotenv==1.0.1
+# ── Data & ML: pinned to slim wheels to stay under 512 MB ─────────────────
+pandas==2.1.4
+numpy==1.26.4
+scikit-learn==1.4.2
+joblib==1.4.0
+xgboost==2.0.3
+# ── Document / email / AI ──────────────────────────────────────────────────
+python-docx==1.1.0
+sendgrid==6.11.0
+google-generativeai==0.5.4
+# ── Firebase (thin SDK) ────────────────────────────────────────────────────
+firebase-admin==6.3.0
+requests==2.31.0

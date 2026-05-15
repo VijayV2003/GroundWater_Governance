@@ -26,46 +26,25 @@ import asyncio
 
 from dotenv import load_dotenv
 load_dotenv()
-from sendgrid import SendGridAPIClient
-from sendgrid.helpers.mail import Mail
-import numpy as np
+# ── Heavy imports are ALL deferred to first-use (lazy) to stay under 512 MB ──
+# Only lightweight stdlib + FastAPI loaded at startup (~30 MB total)
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from fastapi.responses import StreamingResponse
 import io
-from docx import Document
-
-# ── Internal modules ─────────────────────────────────────────────────────────
-from data.real_data_ingestion import (
-    load_real_stations,
-    get_time_series_for_station,
-    get_all_real_stations_with_status,
-)
-from data_generator import (
-    STATIONS as SYNTHETIC_STATIONS,
-    generate_socioeconomic_features,
-    get_regional_summary,
-)
-from forecasting        import GroundwaterForecaster
-from dhsf               import DHSFModel, FEATURE_COLS as DHSF_FEATURES
-from anomaly_detection  import AnomalyDetector
-from recharge_prediction import RechargePredictor
-from gsi_dherp          import GSIInput, compute_gsi, compute_dherp
-from aquifer_stress     import AquiferStressClassifier, FEATURE_COLS as STRESS_FEATURES
-from firebase_utils     import fetch_policy_maker_emails
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 SAVED_MODELS_DIR = os.path.join(os.path.dirname(__file__), "saved_models")
 
-# ── Singleton model instances (loaded once at startup) ────────────────────────
-_forecasters: Dict[str, GroundwaterForecaster] = {}
-_dhsf:        DHSFModel                        = None
-_detector:    AnomalyDetector                  = None
-_recharge:    RechargePredictor                = None
-_stress_clf:  AquiferStressClassifier          = None
+# ── Singleton model instances — all None at startup, filled lazily ─────────────
+_forecasters: Dict[str, Any] = {}
+_dhsf        = None
+_detector    = None
+_recharge    = None
+_stress_clf  = None
 
 # Cache the real station list at startup
 _real_stations: List[Dict] = []
@@ -88,6 +67,20 @@ _real_stations: List[Dict] = []
 #       return r.json()
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _np():
+    """Lazy numpy — only loaded when first email or computation runs."""
+    import numpy as _numpy
+    return _numpy
+
+def _load_real_data_module():
+    from data.real_data_ingestion import (
+        load_real_stations as _lrs,
+        get_time_series_for_station as _gtss,
+        get_all_real_stations_with_status as _garl,
+    )
+    return _lrs, _gtss, _garl
+
+
 async def send_email_updates():
     """Background task to send real emails via SendGrid to policy holders every 5 minutes."""
     while True:
@@ -102,7 +95,8 @@ async def send_email_updates():
             continue
             
         # Dynamically fetch latest policy makers from Firebase Firestore
-        receiver_emails = fetch_policy_maker_emails()
+        from firebase_utils import fetch_policy_maker_emails as _fpm
+        receiver_emails = _fpm()
 
         if not receiver_emails:
             logger.warning("No policy maker emails found in Firebase or .env. Skipping dispatch.")
@@ -113,11 +107,13 @@ async def send_email_updates():
             continue
 
         # --- Fetch Live Results for Email ---
-        stations = get_all_real_stations_with_status(limit=5)
+        _, __, garl = _load_real_data_module()
+        stations = garl(limit=5)
         critical_stations = [s for s in stations if s["status"] == "critical"]
         warning_stations  = [s for s in stations if s["status"] == "warning"]
 
         # Sustainability Index Logic
+        np = _np()
         baselines = [s["base_level"] for s in stations]
         levels    = [s["waterLevel"] for s in stations]
         ratios    = [b / l if l > 0 else 1.0 for b, l in zip(baselines, levels)]
@@ -222,7 +218,9 @@ async def send_email_updates():
 
         try:
             # We must run this synchronous HTTP request in a threadpool to not block asyncio
-            sg = SendGridAPIClient(api_key)
+            from sendgrid import SendGridAPIClient as _SG
+            from sendgrid.helpers.mail import Mail as _Mail
+            sg = _SG(api_key)
             response = await asyncio.to_thread(sg.send, message)
             logger.info(f"📧 [EMAIL SENT SUCCESS] Status Code: {response.status_code}")
         except Exception as e:
@@ -239,14 +237,16 @@ def _get_detector():
         with _model_lock:
             if _detector is None:
                 import joblib as _jl
+                from anomaly_detection import AnomalyDetector as _AD
+                _, get_ts, __ = _load_real_data_module()
                 path = os.path.join(SAVED_MODELS_DIR, "global_anomaly_detector.joblib")
                 if os.path.exists(path):
-                    _detector = AnomalyDetector.load(path)
+                    _detector = _jl.load(path)
                 else:
-                    ref_df = get_time_series_for_station(_real_stations[0]["id"])
-                    _detector = AnomalyDetector()
+                    ref_df = get_ts(_real_stations[0]["id"])
+                    _detector = _AD()
                     _detector.fit(ref_df)
-                    _detector.save(path)
+                    _jl.dump(_detector, path)
     return _detector
 
 def _get_dhsf():
@@ -255,11 +255,12 @@ def _get_dhsf():
         with _model_lock:
             if _dhsf is None:
                 import joblib as _jl
+                from dhsf import DHSFModel as _DM
                 path = os.path.join(SAVED_MODELS_DIR, "dhsf_model.joblib")
                 if os.path.exists(path):
                     _dhsf = _jl.load(path)
                 else:
-                    _dhsf = DHSFModel()
+                    _dhsf = _DM()
                     _dhsf.train()
                     _jl.dump(_dhsf, path)
     return _dhsf
@@ -270,11 +271,12 @@ def _get_recharge():
         with _model_lock:
             if _recharge is None:
                 import joblib as _jl
+                from recharge_prediction import RechargePredictor as _RP
                 path = os.path.join(SAVED_MODELS_DIR, "recharge_predictor.joblib")
                 if os.path.exists(path):
                     _recharge = _jl.load(path)
                 else:
-                    _recharge = RechargePredictor()
+                    _recharge = _RP()
                     _recharge.train()
                     _jl.dump(_recharge, path)
     return _recharge
@@ -285,11 +287,12 @@ def _get_stress_clf():
         with _model_lock:
             if _stress_clf is None:
                 import joblib as _jl
+                from aquifer_stress import AquiferStressClassifier as _AS
                 path = os.path.join(SAVED_MODELS_DIR, "stress_classifier.joblib")
                 if os.path.exists(path):
                     _stress_clf = _jl.load(path)
                 else:
-                    _stress_clf = AquiferStressClassifier()
+                    _stress_clf = _AS()
                     _stress_clf.train()
                     _jl.dump(_stress_clf, path)
     return _stress_clf
@@ -299,14 +302,16 @@ def _get_forecaster(station_id: str):
         with _model_lock:
             if station_id not in _forecasters:
                 import joblib as _jl
+                from forecasting import GroundwaterForecaster as _GF
+                _, get_ts, __ = _load_real_data_module()
                 fc_path = os.path.join(SAVED_MODELS_DIR, f"forecaster_{station_id}.joblib")
                 if os.path.exists(fc_path):
-                    _forecasters[station_id] = GroundwaterForecaster.load(fc_path)
+                    _forecasters[station_id] = _jl.load(fc_path)
                 else:
-                    hist_df = get_time_series_for_station(station_id)
-                    fc = GroundwaterForecaster(lags=7)
+                    hist_df = get_ts(station_id)
+                    fc = _GF(lags=7)
                     fc.fit(hist_df["water_level"].values)
-                    fc.save(fc_path)
+                    _jl.dump(fc, fc_path)
                     _forecasters[station_id] = fc
     return _forecasters[station_id]
 
@@ -323,7 +328,9 @@ async def lifespan(app: FastAPI):
     os.makedirs(SAVED_MODELS_DIR, exist_ok=True)
 
     # Only load the lightweight station index at startup
-    _real_stations = load_real_stations(limit=5)
+    # All ML module imports (numpy, pandas, sklearn, xgboost) are deferred to first request
+    lrs, _, __ = _load_real_data_module()
+    _real_stations = lrs(limit=5)
     logger.info(f"  ✓ {len(_real_stations)} stations ready (ML models load on first request)")
 
     # Start the 5-minute background email task
@@ -434,7 +441,8 @@ def _get_real_station(station_id: str) -> Dict:
 
 def _get_hist_df(station_id: str, history_days: int = 365):
     """Fetch real + extrapolated time-series for a station."""
-    df = get_time_series_for_station(station_id, interpolate_daily=True)
+    _, get_ts, __ = _load_real_data_module()
+    df = get_ts(station_id, interpolate_daily=True)
     if df is not None and not df.empty:
         return df.tail(history_days)
     raise HTTPException(404, f"No time-series data available for station {station_id}")
@@ -446,11 +454,15 @@ def _auto_socioeconomic(station: Dict) -> Dict:
     Currently uses the synthetic generator seeded by station id.
     Replace with real census/IMD data once available.
     """
-    synth = next(
-        (s for s in SYNTHETIC_STATIONS if s["region"] == station.get("region")),
-        SYNTHETIC_STATIONS[0],
+    from data_generator import (
+        STATIONS as _SYN_STATIONS,
+        generate_socioeconomic_features as _gsef,
     )
-    return generate_socioeconomic_features(synth)
+    synth = next(
+        (s for s in _SYN_STATIONS if s["region"] == station.get("region")),
+        _SYN_STATIONS[0],
+    )
+    return _gsef(synth)
 
 
 from starlette.responses import RedirectResponse
@@ -488,22 +500,23 @@ def list_stations(limit: int = 100) -> List[Dict]:
     Return real DWLR stations from the Atal Jal dataset, with current
     water-level status computed from the interpolated + extrapolated time-series.
     """
-    return get_all_real_stations_with_status(limit=limit)
+    _, __, garl = _load_real_data_module()
+    return garl(limit=limit)
 
 
 @app.get("/api/dashboard/summary", tags=["Dashboard"])
 def dashboard_summary() -> Dict:
     """Top-level KPI cards — derived from real station readings."""
-    stations = get_all_real_stations_with_status(limit=100)
+    import numpy as np
+    _, __, garl = _load_real_data_module()
+    stations = garl(limit=100)
     statuses  = [s["status"] for s in stations]
     levels    = [s["waterLevel"] for s in stations]
     baselines = [s["base_level"] for s in stations]
 
-    # GSI: ratio of current / baseline depth (lower depth = healthier)
     ratios = [b / l if l > 0 else 1.0 for b, l in zip(baselines, levels)]
     gsi    = int(np.clip(np.mean(ratios) * 80, 0, 100))
 
-    # Approximation for depletion rate and stress
     depletion_rate = int(np.clip((1.0 - np.mean(ratios)) * 100, 0, 100)) if gsi < 100 else 0
     aquifer_stress = int(np.clip(100 - gsi + 10, 0, 100))
 
@@ -522,15 +535,17 @@ def dashboard_summary() -> Dict:
         "people_affected_million": round(2.3 + (depletion_rate - 20) * 0.1, 1),
         "data_source":             "Atal Jal DWLR 2015-2022",
         "realtime_extrapolated_to": datetime.utcnow().strftime("%Y-%m-%d"),
-        "api_key_ready":           True,  # backend is ready; swap stub in real_data_ingestion.py
+        "api_key_ready":           True,
     }
 
 
 @app.get("/api/dashboard/regional", tags=["Dashboard"])
 def regional_summary() -> List[Dict]:
     """Regional aggregation — weighted by real station alerts."""
-    stations = get_all_real_stations_with_status(limit=100)
-    return get_regional_summary(stations)
+    from data_generator import get_regional_summary as _grs
+    _, __, garl = _load_real_data_module()
+    stations = garl(limit=100)
+    return _grs(stations)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -583,6 +598,7 @@ def classify_depletion_cause(req: DHSFRequest) -> Dict:
 def dhsf_auto(station_id: str) -> Dict:
     """Auto-classify using time-series derived + socioeconomic proxy features."""
     hist_df  = _get_hist_df(station_id, 365)
+    import numpy as np
     levels   = hist_df["water_level"].values
     trend_yr = float(np.polyfit(np.arange(len(levels)), levels, 1)[0] * 365)
 
@@ -620,9 +636,10 @@ def get_alerts(limit: int = 20) -> List[Dict]:
     """
     station_results = []
     det = _get_detector()
+    _, get_ts, __ = _load_real_data_module()
     for s in _real_stations[:20]:
         try:
-            hist_df = get_time_series_for_station(s["id"], interpolate_daily=True)
+            hist_df = get_ts(s["id"], interpolate_daily=True)
             if hist_df is not None and len(hist_df) >= 7:
                 res = det.detect(hist_df.tail(365), s["id"])
                 station_results.append(res)
@@ -669,14 +686,17 @@ def recharge_auto(station_id: str) -> Dict:
 
 @app.post("/api/models/gsi", tags=["Model 5 – GSI Scoring"])
 def score_gsi(req: GSIRequest) -> Dict:
-    inp    = GSIInput(**req.model_dump(exclude={"station_id"}))
-    result = compute_gsi(inp)
+    from gsi_dherp import GSIInput as _GSIInput, compute_gsi as _compute_gsi
+    inp    = _GSIInput(**req.model_dump(exclude={"station_id"}))
+    result = _compute_gsi(inp)
     result["station_id"] = req.station_id
     return result
 
 
 @app.get("/api/models/gsi/{station_id}", tags=["Model 5 – GSI Scoring"])
 def gsi_auto(station_id: str) -> Dict:
+    import numpy as np
+    from gsi_dherp import GSIInput as _GSIInput, compute_gsi as _compute_gsi
     station  = _get_real_station(station_id)
     if not station:
         raise HTTPException(404, f"Station {station_id} not found")
@@ -684,7 +704,7 @@ def gsi_auto(station_id: str) -> Dict:
     current  = float(hist["water_level"].iloc[-1])
     baseline = station["base_level"]
     trend    = float(np.polyfit(np.arange(len(hist)), hist["water_level"].values, 1)[0] * 365)
-    inp = GSIInput(
+    inp = _GSIInput(
         current_level_m=current,
         baseline_level_m=baseline,
         recharge_rate_mm_yr=300.0,
@@ -693,7 +713,7 @@ def gsi_auto(station_id: str) -> Dict:
         climatic_recharge_support=0.55,
         aquifer_storage_coeff=0.12,
     )
-    result = compute_gsi(inp)
+    result = _compute_gsi(inp)
     result["station_id"] = station_id
     result["trend_m_per_year"] = round(trend, 3)
     return result
@@ -705,7 +725,8 @@ def gsi_auto(station_id: str) -> Dict:
 
 @app.post("/api/models/dherp", tags=["Model 6 – DH-ERP"])
 def compute_dherp_endpoint(req: DHERPRequest) -> Dict:
-    result = compute_dherp(
+    from gsi_dherp import compute_dherp as _compute_dherp
+    result = _compute_dherp(
         current_level_m=req.current_level_m,
         baseline_level_m=req.baseline_level_m,
         aquifer_area_km2=req.aquifer_area_km2,
@@ -718,13 +739,14 @@ def compute_dherp_endpoint(req: DHERPRequest) -> Dict:
 
 @app.get("/api/models/dherp/{station_id}", tags=["Model 6 – DH-ERP"])
 def dherp_auto(station_id: str) -> Dict:
+    from gsi_dherp import compute_dherp as _compute_dherp
     station  = _get_real_station(station_id)
     if not station:
         raise HTTPException(404, f"Station {station_id} not found")
     hist    = _get_hist_df(station_id, 365)
     current  = float(hist["water_level"].iloc[-1])
     baseline = station["base_level"]
-    result   = compute_dherp(current, baseline, aquifer_area_km2=150.0)
+    result   = _compute_dherp(current, baseline, aquifer_area_km2=150.0)
     result["station_id"] = station_id
     return result
 
@@ -743,6 +765,7 @@ def classify_stress(req: StressRequest) -> Dict:
 
 @app.get("/api/models/stress/{station_id}", tags=["Model 7 – Aquifer Stress"])
 def stress_auto(station_id: str) -> Dict:
+    import numpy as np
     station = _get_real_station(station_id)
     if not station:
         raise HTTPException(404, f"Station {station_id} not found")
@@ -772,8 +795,9 @@ class ReportRequest(BaseModel):
 
 @app.post("/api/policy/generate-report/{station_id}", tags=["Policy Tools"])
 def generate_policy_report(station_id: str, req: ReportRequest = None):
-    """Generate an AI-powered Word document policy brief, optionally embedding a model insights snapshot."""
-    stations = get_all_real_stations_with_status()
+    """Generate an AI-powered Word document policy brief."""
+    _, __, garl = _load_real_data_module()
+    stations = garl()
     station = next((s for s in stations if s["id"] == station_id), None)
     if not station:
         raise HTTPException(404, f"Station {station_id} not found")
@@ -882,11 +906,12 @@ will compromise water security for dependent communities.
         report_text = report_text[first_section.start():]
 
     # ── Build the Word Document ───────────────────────────────────────────────
+    from docx import Document as _Document
     from docx.shared import Inches, Pt, RGBColor
     from docx.enum.text import WD_ALIGN_PARAGRAPH
     from datetime import date as _date
 
-    doc = Document()
+    doc = _Document()
 
     # ── PAGE 1: Model Insights Snapshot (if provided) ─────────────────────────
     if req and req.image_base64:
